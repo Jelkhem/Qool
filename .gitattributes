@@ -1,0 +1,2 @@
+# ملفات bat لازم تفضل CRLF حتى في Download ZIP
+*.bat -text
