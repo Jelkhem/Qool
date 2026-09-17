@@ -1,0 +1,19 @@
+# Python 3.12 (x64) — إصدارات تم تثبيتها واختبارها على Windows 11 مع RTX A1000
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+onnxruntime==1.30.0
+av==18.1.0
+tokenizers==0.23.2
+huggingface-hub==1.31.0
+PySide6==6.11.2
+sounddevice==0.5.6
+numpy==2.3.5
+psutil==7.2.2
+nvidia-ml-py==13.610.43
+comtypes==1.4.16
+# مكتبات CUDA للمعالجة على GPU داخل البيئة المعزولة فقط (لا تغيّر CUDA على النظام)
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cudnn-cu12==9.26.0.51
+nvidia-cuda-nvrtc-cu12==12.9.86
+# للاختبارات
+pytest==9.1.1
