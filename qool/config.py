@@ -51,6 +51,9 @@ class Settings:
     llm_provider: str = "gemini"
     llm_api_key: str = ""              # مشفَّر بـ DPAPI؛ استخدم api_key() / set_api_key()
     llm_model: str = "auto"            # auto = اختيار أفضل موديل متاح للمفتاح
+    tts_engine: str = "gemini"         # gemini = ينطق العامية صح | edge = أسرع بس فصيح
+    gemini_voice: str = "Kore"
+    speech_style: str = ""             # فارغ = التوجيه الافتراضي في tts.DEFAULT_STYLE
     tts_voice: str = "ar-EG-SalmaNeural"
     tts_rate: int = 10                 # سرعة الكلام بالنسبة المئوية (-50..+100)
     tts_output_device: str = ""        # فارغ = سماعة Windows الافتراضية

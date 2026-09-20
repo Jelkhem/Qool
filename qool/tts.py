@@ -1,4 +1,4 @@
-"""نطق النص بأصوات Edge النيورال (مجانية، بدون مفتاح) وفكّها إلى PCM جاهز للتشغيل."""
+"""نطق النص: صوت Gemini (بينطق العامية المصرية صح) وأصوات Edge المجانية كاحتياطي."""
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +22,20 @@ VOICES = (
     ("en-US-GuyNeural", "Guy — إنجليزي أمريكي، رجالي"),
 )
 DEFAULT_VOICE = VOICES[0][0]
+
+# --- صوت Gemini: موديل لغوي، بينطق العامية المصرية صح ويقبل توجيه بالكلام ---
+GEMINI_TTS_MODEL = "gemini-3.1-flash-tts-preview"
+GEMINI_VOICES = (
+    ("Kore", "Kore — حريمي، واضح (الافتراضي)"),
+    ("Sulafat", "Sulafat — حريمي، دافئ"),
+    ("Achernar", "Achernar — حريمي، هادئ"),
+    ("Zephyr", "Zephyr — حريمي، مشرق"),
+    ("Charon", "Charon — رجالي"),
+    ("Puck", "Puck — رجالي، حيوي"),
+)
+DEFAULT_GEMINI_VOICE = GEMINI_VOICES[0][0]
+DEFAULT_STYLE = ("اقرأ النص ده بلهجة مصرية عامية طبيعية، بنبرة زميل بيشرح لزميله بهدوء ووضوح. "
+                 "متزوّدش أي كلام من عندك ومتعلّقش على النص.")
 
 _voices_cache: list[tuple[str, str]] | None = None
 _lock = threading.Lock()
@@ -84,6 +98,95 @@ def synth(text: str, voice: str = DEFAULT_VOICE, rate_percent: int = 0) -> np.nd
         return _decode(mp3)
     except Exception as e:
         raise TTSError(f"تعذّر فكّ ترميز الصوت ({e}).") from None
+
+
+def _gemini_request(text: str, voice: str, api_key: str, model: str, style: str, stream: bool):
+    import json
+    import urllib.error
+    import urllib.request
+
+    from . import llm
+
+    if not api_key:
+        raise TTSError("مفيش مفتاح Gemini، فمش هينفع صوت Gemini.")
+    body = {
+        "contents": [{"parts": [{"text": f"{style}\n\n{text}"}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {
+                "voiceName": voice or DEFAULT_GEMINI_VOICE}}},
+        },
+    }
+    verb = "streamGenerateContent?alt=sse" if stream else "generateContent"
+    url = f"{llm.GEMINI_HOST}/models/{model or GEMINI_TTS_MODEL}:{verb}"
+    req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                                 method="POST")
+    req.add_header("x-goog-api-key", api_key)
+    req.add_header("Content-Type", "application/json; charset=utf-8")
+    try:
+        return urllib.request.urlopen(req, timeout=120)
+    except urllib.error.HTTPError as e:
+        raise llm.gemini_error(e) from None
+    except urllib.error.URLError as e:
+        raise TTSError(f"تعذّر الوصول للإنترنت ({e.reason}).") from None
+
+
+def _audio_data(payload: dict) -> str | None:
+    try:
+        return payload["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _to_float(b64: str) -> np.ndarray:
+    import base64
+
+    return np.frombuffer(base64.b64decode(b64), dtype="<i2").astype(np.float32) / 32768.0
+
+
+def stream_gemini(text: str, voice: str, api_key: str, model: str = "",
+                  style: str = DEFAULT_STYLE, cancel=None):
+    """نطق بموديل Gemini الصوتي، بالتدفق: أول جزء صوت بيوصل خلال ~١.٢ ثانية
+    بدل ما نستنى الجملة كلها تتولّد (~٩ ثواني)."""
+    import json
+
+    text = (text or "").strip()
+    if not text or not any(ch.isalnum() for ch in text):
+        return
+    resp = _gemini_request(text, voice, api_key, model, style, stream=True)
+    other = []
+    got = False
+    with resp:
+        for raw in resp:
+            if cancel is not None and cancel.is_set():
+                return
+            line = raw.decode("utf-8", "replace").strip()
+            if not line.startswith("data:"):
+                if line:
+                    other.append(line)
+                continue
+            try:
+                chunk = json.loads(line[5:].strip())
+            except json.JSONDecodeError:
+                continue
+            data = _audio_data(chunk)
+            if data:
+                got = True
+                yield _to_float(data)
+    from . import llm
+
+    err = llm._trailing_error(other)
+    if err is not None:
+        raise err
+    if not got:
+        raise TTSError("Gemini رجّع رد من غير صوت.")
+
+
+def synth_gemini(text: str, voice: str, api_key: str, model: str = "",
+                 style: str = DEFAULT_STYLE) -> np.ndarray:
+    """نفس الحاجة لكن دفعة واحدة — للاختبارات والمعاينة القصيرة."""
+    parts = list(stream_gemini(text, voice, api_key, model, style))
+    return np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
 
 
 def list_voices(refresh: bool = False) -> list[tuple[str, str]]:

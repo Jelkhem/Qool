@@ -16,10 +16,12 @@ log = logging.getLogger(__name__)
 
 GEMINI_HOST = "https://generativelanguage.googleapis.com/v1beta"
 
-# ترتيب التفضيل عند «اختيار تلقائي»: الأحدث والأسرع أولًا.
+# الترتيب مقاس فعليًا على الخطة المجانية (سبتمبر ٢٠٢٦)، مش بالأحدث:
+# 3.6-flash رد في ١.٤ث و 2.5-flash في ٠.٨ث، بينما 3.7-flash راجع 503 و 3.8-flash أخد ٧.٤ث.
+# الموديلات الأحدث عليها ضغط أكبر على الخطة المجانية، والاستجابة أهم من فرق جودة بسيط في التلخيص.
 GEMINI_PREFERRED = (
-    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
-    "gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite",
+    "gemini-3.6-flash", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.8-flash",
+    "gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.7-flash",
 )
 AUTO = "auto"
 
@@ -34,7 +36,8 @@ EXPLAIN_PROMPT = """إنت بتشرح لزميل مصري شغّال في اله
 - متقراش الكود سطر سطر؛ قول الكود بيعمل إيه في جملة واحدة.
 - ممنوع أي رموز تنسيق خالص: لا نجوم ولا شرطات ولا عناوين ولا جداول ولا إيموجي. نص عادي بس.
 - جمل قصيرة، وكل جملة تنتهي بنقطة، لأن الكلام ده هيتقال بصوت.
-- الطول على قد ما يلزم بس. لو النص قصير، جملتين يكفوا.
+- **قصّر**: من جملتين لأربع جمل، وما تزيدش عن ست مهما كان النص طويل.
+  الكلام ده هيتسمع مش هيتقرا، والطويل بيضيّع المعنى. متكررش نفس المعلومة مرتين.
 - لو في تحذير أو حاجة ممكن تغلط أو محتاجة انتباه، نبّه عليها في الآخر.
 - متسألش أسئلة ومتقولش إنك ذكاء اصطناعي. اتكلم على طول."""
 
@@ -67,6 +70,10 @@ class ModelMissing(LLMError):
     """الموديل المختار مش متاح للمفتاح ده (404)."""
 
 
+class Overloaded(LLMError):
+    """الموديل واقع تحت ضغط (503) — يُجرَّب غيره."""
+
+
 def _request(url: str, api_key: str, body: dict | None, timeout: float, stream: bool):
     data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url, data=data, method="POST" if data else "GET")
@@ -78,12 +85,12 @@ def _request(url: str, api_key: str, body: dict | None, timeout: float, stream: 
     try:
         return urllib.request.urlopen(req, timeout=timeout)
     except urllib.error.HTTPError as e:
-        raise _http_error(e) from None
+        raise gemini_error(e) from None
     except urllib.error.URLError as e:
         raise LLMError(f"تعذّر الوصول للإنترنت ({e.reason}).") from None
 
 
-def _http_error(e: urllib.error.HTTPError) -> LLMError:
+def gemini_error(e: urllib.error.HTTPError) -> LLMError:
     try:
         detail = json.loads(e.read().decode("utf-8", "replace")).get("error", {}).get("message", "")
     except Exception:
@@ -94,6 +101,8 @@ def _http_error(e: urllib.error.HTTPError) -> LLMError:
         return ModelMissing(detail or "الموديل ده مش متاح للمفتاح بتاعك.")
     if e.code == 429:
         return QuotaError("خلص الحد المجاني لدلوقتي. استنى شوية أو غيّر الموديل من الإعدادات.")
+    if e.code == 503:
+        return Overloaded("الموديل ده عليه ضغط دلوقتي.")
     if e.code >= 500:
         return LLMError(f"سيرفر Gemini مش مستجيب دلوقتي (رمز {e.code}). جرّب تاني.")
     return LLMError(detail or f"رفض الطلب (رمز {e.code}).")
@@ -107,7 +116,7 @@ def list_models(api_key: str, timeout: float = 20.0) -> list[str]:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             payload = json.load(r)
     except urllib.error.HTTPError as e:
-        raise _http_error(e) from None
+        raise gemini_error(e) from None
     except urllib.error.URLError as e:
         raise LLMError(f"تعذّر الوصول للإنترنت ({e.reason}).") from None
     out = []
@@ -137,6 +146,14 @@ def resolve_model(api_key: str, wanted: str) -> str:
     raise LLMError("مفيش أي موديل متاح للمفتاح ده.")
 
 
+def fallback_models(api_key: str, avoid: set[str]) -> list[str]:
+    """الموديلات اللي نجرّبها بعد ما واحد يقع، بالترتيب."""
+    available = [n for n in list_models(api_key) if n not in avoid]
+    ordered = [n for n in GEMINI_PREFERRED if n in available]
+    ordered += sorted(n for n in available if "flash" in n and n not in ordered)
+    return ordered
+
+
 def _parts_text(chunk: dict) -> str:
     out = []
     for cand in chunk.get("candidates", []):
@@ -156,6 +173,24 @@ def _blocked_reason(chunk: dict) -> str | None:
         if cand.get("finishReason") in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST"):
             return "النص اترفض من فلتر الأمان بتاع Gemini."
     return None
+
+
+def _trailing_error(lines: list[str]) -> LLMError | None:
+    """Gemini بيقطع التدفق ويكتب JSON خطأ في جسم الرد؛ لازم نلاقيه بدل ما نرجّع رد ناقص."""
+    if not lines:
+        return None
+    try:
+        info = json.loads("".join(lines)).get("error", {})
+    except json.JSONDecodeError:
+        return None
+    code, msg = info.get("code"), info.get("message", "")
+    if not code:
+        return None
+    if code == 503:
+        return Overloaded("الموديل عليه ضغط وقطع الرد في نصّه.")
+    if code == 429:
+        return QuotaError("خلص الحد المجاني لدلوقتي. استنى شوية أو غيّر الموديل من الإعدادات.")
+    return LLMError(msg or f"الرد اتقطع (رمز {code}).")
 
 
 def stream_explain(text: str, *, api_key: str, model: str, mode: str = "explain",
@@ -186,12 +221,15 @@ def stream_explain(text: str, *, api_key: str, model: str, mode: str = "explain"
         body["generationConfig"].pop("thinkingConfig", None)
         resp = _request(url, api_key, body, timeout, stream=True)
 
+    other = []          # سطور مش "data:" — الخطأ بييجي فيها في نص التدفق
     with resp:
         for raw in resp:
             if cancel is not None and cancel.is_set():
                 return
             line = raw.decode("utf-8", "replace").strip()
             if not line.startswith("data:"):
+                if line:
+                    other.append(line)
                 continue
             payload = line[5:].strip()
             if not payload or payload == "[DONE]":
@@ -206,3 +244,6 @@ def stream_explain(text: str, *, api_key: str, model: str, mode: str = "explain"
             piece = _parts_text(chunk)
             if piece:
                 yield piece
+    err = _trailing_error(other)
+    if err is not None:
+        raise err

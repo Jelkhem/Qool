@@ -11,6 +11,20 @@ from ..models import CATALOG, is_downloaded
 from . import theme
 from .widgets import Card, HotkeyEdit, RecordButton, ToggleSwitch, kbd, row, separator
 
+TTS_ENGINES = (
+    ("gemini", "Gemini — بينطق العامية المصرية صح (مُوصى به)"),
+    ("edge", "Edge — أسرع وبدون مفتاح، بس بينطق العامية بالفصحى"),
+)
+
+GEMINI_VOICES = (
+    ("Kore", "Kore — حريمي، واضح"),
+    ("Sulafat", "Sulafat — حريمي، دافئ"),
+    ("Achernar", "Achernar — حريمي، هادئ"),
+    ("Zephyr", "Zephyr — حريمي، مشرق"),
+    ("Charon", "Charon — رجالي"),
+    ("Puck", "Puck — رجالي، حيوي"),
+)
+
 READ_MODES = (
     ("explain", "لخّص واشرح بالمصري"),
     ("translate", "ترجم النص كامل للمصري"),
@@ -391,8 +405,8 @@ class MainWindow(QMainWindow):
         v.addWidget(c)
 
         # القارئ
-        c = Card("القارئ", "بيبعت النص المظلَّل لـ Gemini عشان يفهمه ويلخّصه، وبيقراه بصوت Edge المجاني. "
-                           "النص بيخرج من الجهاز للخدمتين دول — متستخدمهوش مع كلام سرّي.")
+        c = Card("القارئ", "بيبعت النص المظلَّل لـ Gemini عشان يفهمه ويلخّصه ويقراه بصوت. "
+                           "النص بيخرج من الجهاز لجوجل — متستخدمهوش مع كلام سرّي.")
         self.read_hotkey_edit = HotkeyEdit(s.read_hotkey)
         self.read_hotkey_edit.capture_started.connect(self.app.suspend_hotkeys)
         self.read_hotkey_edit.capture_ended.connect(self.app.resume_hotkeys)
@@ -434,6 +448,31 @@ class MainWindow(QMainWindow):
             lambda: self.app.update_setting("read_mode", self.read_mode_combo.currentData()))
         c.body.addWidget(row("يعمل إيه بالنص", self.read_mode_combo))
 
+        self.engine_combo = QComboBox()
+        for key, label in TTS_ENGINES:
+            self.engine_combo.addItem(label, key)
+        idx = self.engine_combo.findData(s.tts_engine)
+        self.engine_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.engine_combo.currentIndexChanged.connect(self._engine_changed)
+        c.body.addWidget(row("محرّك الصوت", self.engine_combo))
+
+        gvoicew = QWidget()
+        gvoicew.setObjectName("clear")
+        gvl = QHBoxLayout(gvoicew)
+        gvl.setContentsMargins(0, 0, 0, 0)
+        self.gvoice_combo = QComboBox()
+        for key, label in GEMINI_VOICES:
+            self.gvoice_combo.addItem(label, key)
+        gidx = self.gvoice_combo.findData(s.gemini_voice)
+        self.gvoice_combo.setCurrentIndex(gidx if gidx >= 0 else 0)
+        self.gvoice_combo.currentIndexChanged.connect(
+            lambda: self.app.update_setting("gemini_voice", self.gvoice_combo.currentData()))
+        play = QPushButton("سمّعني")
+        play.clicked.connect(self.app.preview_voice)
+        gvl.addWidget(self.gvoice_combo, 1)
+        gvl.addWidget(play)
+        c.body.addWidget(row("صوت Gemini", gvoicew))
+
         voicew = QWidget()
         voicew.setObjectName("clear")
         vl = QHBoxLayout(voicew)
@@ -442,12 +481,9 @@ class MainWindow(QMainWindow):
         self.voice_combo.currentIndexChanged.connect(self._voice_changed)
         more = QPushButton("كل الأصوات")
         more.clicked.connect(lambda: self.refresh_voices(True))
-        play = QPushButton("سمّعني")
-        play.clicked.connect(self.app.preview_voice)
         vl.addWidget(self.voice_combo, 1)
         vl.addWidget(more)
-        vl.addWidget(play)
-        c.body.addWidget(row("الصوت", voicew))
+        c.body.addWidget(row("صوت Edge (احتياطي)", voicew))
 
         rate = QSpinBox()
         rate.setRange(-50, 100)
@@ -455,7 +491,7 @@ class MainWindow(QMainWindow):
         rate.setSuffix(" %")
         rate.setValue(s.tts_rate)
         rate.valueChanged.connect(lambda val: self.app.update_setting("tts_rate", int(val)))
-        c.body.addWidget(row("سرعة الكلام", rate))
+        c.body.addWidget(row("سرعة صوت Edge", rate))
 
         self.speaker_combo = QComboBox()
         self.speaker_combo.currentIndexChanged.connect(
@@ -789,6 +825,9 @@ class MainWindow(QMainWindow):
             cur = combo.count() - 1
         combo.setCurrentIndex(cur)
         combo.blockSignals(False)
+
+    def _engine_changed(self):
+        self.app.update_setting("tts_engine", self.engine_combo.currentData() or "gemini")
 
     def _voice_changed(self):
         self.app.update_setting("tts_voice", self.voice_combo.currentData() or "")

@@ -4,8 +4,10 @@ from io import BytesIO
 
 import pytest
 
-from qool import llm
-from qool.reader import speakable, take_sentences
+import numpy as np
+
+from qool import llm, tts
+from qool.reader import coalesce, speakable, take_sentences
 from qool.secrets import mask, protect, unprotect
 
 
@@ -133,11 +135,93 @@ def test_missing_key_raises_before_network():
         list(llm.stream_explain("hi", api_key="", model="m"))
 
 
-def test_resolve_model_prefers_newest_flash(monkeypatch):
+def test_resolve_model_follows_measured_preference(monkeypatch):
+    # الترتيب بالاستجابة المقاسة مش بالأحدث: 2.5-flash أسبق من 3.5-flash في GEMINI_PREFERRED
     monkeypatch.setattr(llm, "list_models",
-                        lambda key: ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-pro"])
-    assert llm.resolve_model("k", llm.AUTO) == "gemini-3.5-flash"
+                        lambda key: ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro"])
+    assert llm.resolve_model("k", llm.AUTO) == "gemini-2.5-flash"
+
+
+def test_fallback_models_skips_the_ones_already_tried(monkeypatch):
+    monkeypatch.setattr(llm, "list_models",
+                        lambda key: ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-3.5-flash"])
+    out = llm.fallback_models("k", {"gemini-3.6-flash"})
+    assert "gemini-3.6-flash" not in out
+    assert out[0] == "gemini-2.5-flash"
+
+
+def test_trailing_error_detects_mid_stream_503():
+    # Gemini بيقطع التدفق ويكتب الخطأ في جسم الرد بدل ما يرجّع رمز HTTP
+    lines = ["{", '"error": {', '"code": 503,', '"message": "high demand",', '"status": "UNAVAILABLE"', "}", "}"]
+    err = llm._trailing_error(lines)
+    assert isinstance(err, llm.Overloaded)
+
+
+def test_trailing_error_ignores_clean_stream():
+    assert llm._trailing_error([]) is None
 
 
 def test_resolve_model_keeps_explicit_choice():
     assert llm.resolve_model("k", "gemini-2.5-pro") == "gemini-2.5-pro"
+
+
+# ---------- صوت Gemini ----------
+def _audio_sse(chunks_b64):
+    body = "".join(
+        "data: " + json.dumps(
+            {"candidates": [{"content": {"parts": [{"inlineData": {"data": b}}]}}]}) + "\n\n"
+        for b in chunks_b64)
+    return BytesIO(body.encode("utf-8"))
+
+
+def _b64_silence(samples):
+    import base64
+    return base64.b64encode(np.zeros(samples, dtype="<i2").tobytes()).decode()
+
+
+def test_stream_gemini_yields_float_audio(monkeypatch):
+    monkeypatch.setattr(tts, "_gemini_request",
+                        lambda *a, **k: _audio_sse([_b64_silence(480), _b64_silence(480)]))
+    parts = list(tts.stream_gemini("أهلا", "Kore", "key"))
+    assert len(parts) == 2
+    assert all(p.dtype == np.float32 for p in parts)
+    assert sum(p.size for p in parts) == 960
+
+
+def test_stream_gemini_raises_when_no_audio(monkeypatch):
+    monkeypatch.setattr(tts, "_gemini_request", lambda *a, **k: BytesIO(b"data: {}\n\n"))
+    with pytest.raises(tts.TTSError):
+        list(tts.stream_gemini("أهلا", "Kore", "key"))
+
+
+def test_stream_gemini_surfaces_mid_stream_overload(monkeypatch):
+    body = ("data: " + json.dumps(
+        {"candidates": [{"content": {"parts": [{"inlineData": {"data": _b64_silence(240)}}]}}]})
+        + '\n\n{\n"error": {\n"code": 503,\n"message": "busy"\n}\n}\n')
+    monkeypatch.setattr(tts, "_gemini_request", lambda *a, **k: BytesIO(body.encode("utf-8")))
+    with pytest.raises(llm.Overloaded):
+        list(tts.stream_gemini("أهلا", "Kore", "key"))
+
+
+def test_stream_gemini_needs_a_key():
+    with pytest.raises(tts.TTSError):
+        list(tts.stream_gemini("أهلا", "Kore", ""))
+
+
+# ---------- تجميع أجزاء الصوت ----------
+def test_coalesce_merges_tiny_chunks():
+    tiny = [np.zeros(960, dtype=np.float32)] * 30      # ٤٠ مللي × ٣٠ = ١.٢ ثانية
+    out = list(coalesce(tiny, seconds=0.5))
+    assert len(out) < len(tiny)
+    assert sum(p.size for p in out) == 30 * 960
+    assert out[0].size >= int(0.5 * tts.RATE)
+
+
+def test_coalesce_keeps_the_tail():
+    out = list(coalesce([np.zeros(100, dtype=np.float32)], seconds=0.5))
+    assert len(out) == 1 and out[0].size == 100
+
+
+def test_coalesce_skips_empty_pieces():
+    pieces = [np.zeros(0, dtype=np.float32), np.zeros(240, dtype=np.float32)]
+    assert sum(p.size for p in coalesce(pieces, seconds=0.5)) == 240
