@@ -24,7 +24,9 @@ VOICES = (
 DEFAULT_VOICE = VOICES[0][0]
 
 # --- صوت Gemini: موديل لغوي، بينطق العامية المصرية صح ويقبل توجيه بالكلام ---
-GEMINI_TTS_MODEL = "gemini-3.1-flash-tts-preview"
+# الحد المجاني ١٠ طلبات في اليوم **لكل موديل**، فالتدوير بينهم بيضاعف عدد القراءات.
+GEMINI_TTS_MODELS = ("gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts")
+GEMINI_TTS_MODEL = GEMINI_TTS_MODELS[0]
 GEMINI_VOICES = (
     ("Kore", "Kore — حريمي، واضح (الافتراضي)"),
     ("Sulafat", "Sulafat — حريمي، دافئ"),
@@ -36,6 +38,12 @@ GEMINI_VOICES = (
 DEFAULT_GEMINI_VOICE = GEMINI_VOICES[0][0]
 DEFAULT_STYLE = ("اقرأ النص ده بلهجة مصرية عامية طبيعية، بنبرة زميل بيشرح لزميله بهدوء ووضوح. "
                  "متزوّدش أي كلام من عندك ومتعلّقش على النص.")
+# موديلات 2.5 بترفض التوجيه بالعربي («بيحاول يولّد نص») وبتقبل الصيغة الإنجليزية دي.
+STYLE_25 = "Say in a natural, calm Egyptian Arabic accent, reading exactly this text:"
+
+
+def style_for(model: str, style: str) -> str:
+    return STYLE_25 if model.startswith("gemini-2.5") else style
 
 _voices_cache: list[tuple[str, str]] | None = None
 _lock = threading.Lock()
@@ -117,6 +125,7 @@ def _gemini_request(text: str, voice: str, api_key: str, model: str, style: str,
                 "voiceName": voice or DEFAULT_GEMINI_VOICE}}},
         },
     }
+    body["contents"][0]["parts"][0]["text"] = f"{style_for(model, style)}\n\n{text}"
     verb = "streamGenerateContent?alt=sse" if stream else "generateContent"
     url = f"{llm.GEMINI_HOST}/models/{model or GEMINI_TTS_MODEL}:{verb}"
     req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
@@ -147,12 +156,34 @@ def _to_float(b64: str) -> np.ndarray:
 def stream_gemini(text: str, voice: str, api_key: str, model: str = "",
                   style: str = DEFAULT_STYLE, cancel=None):
     """نطق بموديل Gemini الصوتي، بالتدفق: أول جزء صوت بيوصل خلال ~١.٢ ثانية
-    بدل ما نستنى الجملة كلها تتولّد (~٩ ثواني)."""
-    import json
+    بدل ما نستنى الجملة كلها تتولّد (~٩ ثواني).
 
+    الحد المجاني ١٠ طلبات في اليوم **لكل موديل**، فلما واحد يخلص بنعدّي على اللي بعده.
+    """
     text = (text or "").strip()
     if not text or not any(ch.isalnum() for ch in text):
         return
+    models = [model] if model else list(GEMINI_TTS_MODELS)
+    last: Exception | None = None
+    for i, m in enumerate(models):
+        try:
+            yield from _stream_one(text, voice, api_key, m, style, cancel)
+            return
+        except Exception as e:
+            from . import llm
+
+            # الحصة بتخلص لكل موديل على حدة؛ أي غلطة تانية معناها نوقف
+            if not isinstance(e, llm.QuotaError) or i == len(models) - 1:
+                raise
+            log.info("حصة %s خلصت؛ بنجرّب %s", m, models[i + 1])
+            last = e
+    if last is not None:
+        raise last
+
+
+def _stream_one(text: str, voice: str, api_key: str, model: str, style: str, cancel):
+    import json
+
     resp = _gemini_request(text, voice, api_key, model, style, stream=True)
     other = []
     got = False

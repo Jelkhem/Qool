@@ -51,12 +51,37 @@ class Settings:
     llm_provider: str = "gemini"
     llm_api_key: str = ""              # مشفَّر بـ DPAPI؛ استخدم api_key() / set_api_key()
     llm_model: str = "auto"            # auto = اختيار أفضل موديل متاح للمفتاح
-    tts_engine: str = "gemini"         # gemini = ينطق العامية صح | edge = أسرع بس فصيح
+    tts_engine: str = "gemini"         # gemini = ينطق العامية صح | edge = مجاني بلا حد بس فصيح
+    tts_day: str = ""                  # تاريخ العدّاد (YYYY-MM-DD)
+    tts_calls: int = 0                 # طلبات صوت Gemini النهاردة
+    tts_exhausted: bool = False        # خلص الحد النهاردة؟ يتصفّر مع أول يوم جديد
     gemini_voice: str = "Kore"
     speech_style: str = ""             # فارغ = التوجيه الافتراضي في tts.DEFAULT_STYLE
     tts_voice: str = "ar-EG-SalmaNeural"
     tts_rate: int = 10                 # سرعة الكلام بالنسبة المئوية (-50..+100)
     tts_output_device: str = ""        # فارغ = سماعة Windows الافتراضية
+
+    # ---- حصة صوت Gemini اليومية ----
+    def _roll_day(self) -> None:
+        import datetime
+        today = datetime.date.today().isoformat()
+        if self.tts_day != today:
+            self.tts_day, self.tts_calls, self.tts_exhausted = today, 0, False
+
+    def voice_budget_left(self) -> bool:
+        """الحد المجاني ١٠ طلبات في اليوم لكل موديل صوت."""
+        self._roll_day()
+        return not self.tts_exhausted
+
+    def note_voice_call(self) -> None:
+        self._roll_day()
+        self.tts_calls += 1
+        self.save()
+
+    def note_voice_exhausted(self) -> None:
+        self._roll_day()
+        self.tts_exhausted = True
+        self.save()
 
     # ---- المفتاح ----
     def api_key(self) -> str:

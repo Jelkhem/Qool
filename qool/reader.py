@@ -114,6 +114,7 @@ class Reader:
         self._lock = threading.Lock()
         self._mode = ""               # يتجاوز read_mode لهذه القراءة فقط (معاينة الصوت)
         self._edge_fallback = False   # صوت Gemini وقع، فبنكمّل على Edge
+        self._gemini_voice = False    # بيتحدد مرة واحدة أول كل قراءة
 
     # ---------- التحكم ----------
     def is_running(self) -> bool:
@@ -151,6 +152,20 @@ class Reader:
     @property
     def mode(self) -> str:
         return self._mode or self.settings.read_mode
+
+    @property
+    def dialect(self) -> str:
+        """صوت Gemini بينطق العامية صح؛ أصوات Edge متدرّبة على الفصحى،
+        فلو هنقرا بـEdge لازم النص نفسه يتكتب فصحى من الأول."""
+        return "masri" if self._gemini_voice else "fosha"
+
+    def _pick_voice_engine(self) -> None:
+        s = self.settings
+        self._gemini_voice = (s.tts_engine == "gemini" and bool(s.api_key())
+                              and s.voice_budget_left())
+        self._edge_fallback = not self._gemini_voice
+        if s.tts_engine == "gemini" and not self._gemini_voice and s.api_key():
+            self.on_state("thinking", "خلصت حصة صوت Gemini النهاردة — هنقرا بصوت Edge بالفصحى.")
 
     # ---------- التشغيل (الخيط الرئيسي للقراءة) ----------
     def _run(self, text: str) -> None:
@@ -196,6 +211,7 @@ class Reader:
         """يولّد الصوت ويحطّه في الطابور وهو بيتقال، فالتوليد دايمًا سابق التشغيل."""
         spoken: list[str] = []
         try:
+            self._pick_voice_engine()
             for sentence in self._sentences(text):
                 if self._cancel.is_set():
                     return
@@ -222,24 +238,35 @@ class Reader:
     def _synth(self, sentence: str):
         """أجزاء صوت لقطعة. Gemini بيدفّق فبنشغّل وهو بيولّد؛ Edge بيرجّع مرة واحدة."""
         s = self.settings
-        if s.tts_engine == "gemini" and not self._edge_fallback:
+        if self._gemini_voice:
             try:
+                s.note_voice_call()
                 yield from coalesce(tts.stream_gemini(
                     sentence, s.gemini_voice, s.api_key(),
                     style=s.speech_style or tts.DEFAULT_STYLE, cancel=self._cancel))
                 return
-            except (llm.QuotaError, llm.Overloaded, tts.TTSError) as e:
-                self._edge_fallback = True
+            except llm.QuotaError as e:
+                # خلصت كل موديلات الصوت النهاردة — بلاش نحاول تاني لحد بكرة
+                s.note_voice_exhausted()
+                self._gemini_voice = self._edge_fallback = False
+                log.warning("خلصت حصة صوت Gemini (%s)؛ كمّلنا على Edge", e)
+                self.on_state("speaking", "خلصت حصة صوت Gemini النهاردة — كمّلنا بصوت Edge.")
+            except (llm.Overloaded, tts.TTSError) as e:
+                self._gemini_voice = False
                 log.warning("صوت Gemini وقع (%s)؛ كمّلنا على Edge", e)
                 self.on_state("speaking", f"صوت Gemini مش متاح ({e}) — كمّلنا بصوت Edge.")
         yield tts.synth(sentence, s.tts_voice, s.tts_rate)
 
     def _chunk_size(self, first: bool) -> tuple[int, int]:
-        """أول قطعة صغيرة عشان الكلام يبدأ بدري، وبعدها فقرات أكبر:
-        كل قطعة طلب مستقل، فالقليل منها أحسن للحد المجاني ولتوصيل المعنى."""
-        if self.settings.tts_engine == "gemini" and not self._edge_fallback:
-            return (60, 220) if first else (400, 900)
-        return (40, 320)
+        """أول قطعة صغيرة عشان الكلام يبدأ بدري، وبعدها الباقي كله في قطعة واحدة.
+
+        كل قطعة طلب صوت مستقل، والحد المجاني ١٠ طلبات في اليوم **لكل موديل**.
+        قطعتين للقراءة × موديلين صوت = حوالي ١٠ قراءات في اليوم، وأول صوت في ~٤ ثواني.
+        الانتظار للنص كله عشان نوفّر طلب واحد كان بيوصّل أول صوت لـ٢٤ ثانية — مش مستاهل.
+        """
+        if self._gemini_voice:
+            return (60, 220) if first else (400, 4000)
+        return (40, 320)   # Edge مجاني بلا حد، فبنقطّع أكتر عشان يبدأ أسرع
 
     def _sentences(self, text: str):
         """مولّد القطع: من الموديل لو في تلخيص، أو من النص نفسه في وضع «زي ما هو»."""
@@ -281,7 +308,8 @@ class Reader:
         while True:
             try:
                 for piece in llm.stream_explain(text, api_key=key, model=tried[-1],
-                                                mode=self.mode, cancel=self._cancel):
+                                                mode=self.mode, dialect=self.dialect,
+                                                cancel=self._cancel):
                     said_something = True
                     yield piece
                 if tried[-1] != self.settings.llm_model:
