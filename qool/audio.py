@@ -66,6 +66,42 @@ def _find_device(name: str) -> tuple[int | None, str]:
     raise AudioError(f"الميكروفون «{name}» غير موجود. اختر جهازًا آخر من الإعدادات.")
 
 
+def list_output_devices() -> list[str]:
+    """أسماء أجهزة الإخراج (السماعات والكابل الافتراضي)."""
+    sd = _sd()
+    apis = sd.query_hostapis()
+    names: list[str] = []
+    for api_name in _HOSTAPI_PREFERENCE:
+        for api in apis:
+            if api["name"] != api_name:
+                continue
+            for idx in api["devices"]:
+                d = sd.query_devices(idx)
+                if d["max_output_channels"] > 0 and d["name"] not in names:
+                    if api_name != "Windows WASAPI" and any(n.startswith(d["name"][:28]) for n in names):
+                        continue
+                    names.append(d["name"])
+    return names
+
+
+def find_output_device(name: str) -> int | None:
+    """فهرس جهاز الإخراج، أو None للافتراضي. يرفع AudioError لو الاسم مش موجود."""
+    sd = _sd()
+    apis = sd.query_hostapis()
+    if not name:
+        return None
+    for api_name in _HOSTAPI_PREFERENCE:
+        for api in apis:
+            if api["name"] != api_name:
+                continue
+            for idx in api["devices"]:
+                d = sd.query_devices(idx)
+                if d["max_output_channels"] > 0 and (
+                        d["name"] == name or name.startswith(d["name"]) or d["name"].startswith(name)):
+                    return idx
+    raise AudioError(f"جهاز الصوت «{name}» غير موجود. اختر جهازًا آخر من الإعدادات.")
+
+
 def resample(audio: np.ndarray, src_rate: int, dst_rate: int = TARGET_RATE) -> np.ndarray:
     if src_rate == dst_rate or audio.size == 0:
         return audio.astype(np.float32, copy=False)

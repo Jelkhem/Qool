@@ -45,6 +45,24 @@ class Settings:
     bridge_ai_app: str = "ChatGPT.exe"  # لما يتكلم على نفس جهاز Teams بنكتم صوت الميتينج عنه
     theme: str = "system"              # system | dark | light
     first_run_done: bool = False
+    # ---- القارئ: يفهم النص المظلَّل ويقراه بصوت ----
+    read_hotkey: str = "Ctrl+Alt+R"    # قراءة التحديد / إيقاف القراءة
+    read_mode: str = "explain"         # explain | translate | raw
+    llm_provider: str = "gemini"
+    llm_api_key: str = ""              # مشفَّر بـ DPAPI؛ استخدم api_key() / set_api_key()
+    llm_model: str = "auto"            # auto = اختيار أفضل موديل متاح للمفتاح
+    tts_voice: str = "ar-EG-SalmaNeural"
+    tts_rate: int = 10                 # سرعة الكلام بالنسبة المئوية (-50..+100)
+    tts_output_device: str = ""        # فارغ = سماعة Windows الافتراضية
+
+    # ---- المفتاح ----
+    def api_key(self) -> str:
+        from .secrets import unprotect
+        return unprotect(self.llm_api_key)
+
+    def set_api_key(self, key: str) -> None:
+        from .secrets import protect
+        self.llm_api_key = protect((key or "").strip())
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Settings":

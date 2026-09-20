@@ -11,6 +11,12 @@ from ..models import CATALOG, is_downloaded
 from . import theme
 from .widgets import Card, HotkeyEdit, RecordButton, ToggleSwitch, kbd, row, separator
 
+READ_MODES = (
+    ("explain", "لخّص واشرح بالمصري"),
+    ("translate", "ترجم النص كامل للمصري"),
+    ("raw", "اقراه زي ما هو من غير تلخيص"),
+)
+
 STATUS_TEXT = {
     "idle": "جاهز",
     "recording": "جارٍ التسجيل",
@@ -85,6 +91,9 @@ class MainWindow(QMainWindow):
 
         self.set_state("idle", "")
         self.set_bridge_state("off", "")
+        self.set_read_state("off", "")
+        self.refresh_voices()
+        self.refresh_speakers()
         self.update_hotkey_hint()
         self._paint_model_dot("idle")
 
@@ -211,6 +220,50 @@ class MainWindow(QMainWindow):
         bridge.body.addLayout(bhint)
         v.addWidget(bridge)
 
+        # ---------- القارئ ----------
+        rd = Card()
+        rd.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        rd.body.setSpacing(8)
+        rtop = QHBoxLayout()
+        rtitles = QVBoxLayout()
+        rtitles.setSpacing(0)
+        rt = QLabel("القارئ")
+        rt.setObjectName("h2")
+        rsub = QLabel("ظلّل أي كلام، وهو يفهمه ويلخّصه بالمصري ويقراهولك بصوت")
+        rsub.setObjectName("small")
+        rtitles.addWidget(rt)
+        rtitles.addWidget(rsub)
+        rtop.addLayout(rtitles)
+        rtop.addStretch(1)
+        self.read_btn = QPushButton("اقرا التحديد")
+        self.read_btn.setCursor(Qt.PointingHandCursor)
+        self.read_btn.setMinimumWidth(110)
+        self.read_btn.clicked.connect(self.app.toggle_read)
+        rtop.addWidget(self.read_btn)
+        rd.body.addLayout(rtop)
+        self.read_status = QLabel("")
+        self.read_status.setObjectName("small")
+        self.read_status.setWordWrap(True)
+        rd.body.addWidget(self.read_status)
+        self.read_text = QPlainTextEdit()
+        self.read_text.setReadOnly(True)
+        self.read_text.setMaximumHeight(120)
+        self.read_text.setPlaceholderText("اللي بيتقال هيظهر هنا وإنت بتسمع.")
+        rd.body.addWidget(self.read_text)
+        rhint = QHBoxLayout()
+        rhint.setSpacing(6)
+        rh1 = QLabel("الاختصار")
+        rh1.setObjectName("small")
+        self.read_chip = kbd("")
+        rh2 = QLabel("·  اضغطه تاني عشان يسكت")
+        rh2.setObjectName("small")
+        rhint.addWidget(rh1)
+        rhint.addWidget(self.read_chip)
+        rhint.addWidget(rh2)
+        rhint.addStretch(1)
+        rd.body.addLayout(rhint)
+        v.addWidget(rd)
+
         # ---------- النتيجة ----------
         res = Card()
         top = QHBoxLayout()
@@ -335,6 +388,79 @@ class MainWindow(QMainWindow):
         self.bridge_mic_combo = QComboBox()
         self.bridge_mic_combo.currentIndexChanged.connect(self._bridge_mic_changed)
         c.body.addWidget(row("مايك الجسر", self.bridge_mic_combo))
+        v.addWidget(c)
+
+        # القارئ
+        c = Card("القارئ", "بيبعت النص المظلَّل لـ Gemini عشان يفهمه ويلخّصه، وبيقراه بصوت Edge المجاني. "
+                           "النص بيخرج من الجهاز للخدمتين دول — متستخدمهوش مع كلام سرّي.")
+        self.read_hotkey_edit = HotkeyEdit(s.read_hotkey)
+        self.read_hotkey_edit.capture_started.connect(self.app.suspend_hotkeys)
+        self.read_hotkey_edit.capture_ended.connect(self.app.resume_hotkeys)
+        self.read_hotkey_edit.captured.connect(self.app.apply_read_hotkey)
+        c.body.addWidget(row("اقرا التحديد / اسكت", self.read_hotkey_edit))
+        self.read_hotkey_status = QLabel("")
+        self.read_hotkey_status.setObjectName("small")
+        self.read_hotkey_status.setWordWrap(True)
+        c.body.addWidget(self.read_hotkey_status)
+
+        keyw = QWidget()
+        keyw.setObjectName("clear")
+        kl = QHBoxLayout(keyw)
+        kl.setContentsMargins(0, 0, 0, 0)
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setEchoMode(QLineEdit.Password)
+        self.api_key_edit.setPlaceholderText("الصق مفتاح Gemini هنا")
+        self.api_key_edit.setText(s.api_key())
+        save_key = QPushButton("حفظ واختبار")
+        save_key.clicked.connect(lambda: self.app.set_api_key(self.api_key_edit.text()))
+        kl.addWidget(self.api_key_edit, 1)
+        kl.addWidget(save_key)
+        c.body.addWidget(row("مفتاح Gemini", keyw))
+        self.llm_status = QLabel("")
+        self.llm_status.setObjectName("small")
+        self.llm_status.setWordWrap(True)
+        c.body.addWidget(self.llm_status)
+        khint = QLabel("المفتاح مجاني من aistudio.google.com/apikey — بيتحفظ مشفَّرًا بحساب ويندوز بتاعك.")
+        khint.setObjectName("small")
+        khint.setWordWrap(True)
+        c.body.addWidget(khint)
+
+        self.read_mode_combo = QComboBox()
+        for key, label in READ_MODES:
+            self.read_mode_combo.addItem(label, key)
+        idx = self.read_mode_combo.findData(s.read_mode)
+        self.read_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.read_mode_combo.currentIndexChanged.connect(
+            lambda: self.app.update_setting("read_mode", self.read_mode_combo.currentData()))
+        c.body.addWidget(row("يعمل إيه بالنص", self.read_mode_combo))
+
+        voicew = QWidget()
+        voicew.setObjectName("clear")
+        vl = QHBoxLayout(voicew)
+        vl.setContentsMargins(0, 0, 0, 0)
+        self.voice_combo = QComboBox()
+        self.voice_combo.currentIndexChanged.connect(self._voice_changed)
+        more = QPushButton("كل الأصوات")
+        more.clicked.connect(lambda: self.refresh_voices(True))
+        play = QPushButton("سمّعني")
+        play.clicked.connect(self.app.preview_voice)
+        vl.addWidget(self.voice_combo, 1)
+        vl.addWidget(more)
+        vl.addWidget(play)
+        c.body.addWidget(row("الصوت", voicew))
+
+        rate = QSpinBox()
+        rate.setRange(-50, 100)
+        rate.setSingleStep(5)
+        rate.setSuffix(" %")
+        rate.setValue(s.tts_rate)
+        rate.valueChanged.connect(lambda val: self.app.update_setting("tts_rate", int(val)))
+        c.body.addWidget(row("سرعة الكلام", rate))
+
+        self.speaker_combo = QComboBox()
+        self.speaker_combo.currentIndexChanged.connect(
+            lambda: self.app.update_setting("tts_output_device", self.speaker_combo.currentData() or ""))
+        c.body.addWidget(row("يطلع على", self.speaker_combo))
         v.addWidget(c)
 
         # اللصق
@@ -566,6 +692,7 @@ class MainWindow(QMainWindow):
         theme.apply_window_chrome(self, t)
         self._paint_model_dot(getattr(self, "_model_kind", "idle"))
         self.set_bridge_state(*self._bridge_last)
+        self.set_read_state(*self._read_last)
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -612,6 +739,70 @@ class MainWindow(QMainWindow):
         self.bridge_app_meter.setValue(int(app_level * 100))
         self.bridge_mic_meter.setValue(int(mic_level * 100))
         self.bridge_duck.setText("ChatGPT بيتكلم، فصوت الميتينج متكتوم عنه لحظيًا." if ducking else "")
+
+    def set_read_state(self, kind: str, message: str):
+        """kind: off | thinking | speaking | error"""
+        self._read_last = (kind, message)
+        running = kind in ("thinking", "speaking")
+        self.read_btn.setText("اسكت" if running else "اقرا التحديد")
+        self.read_btn.setObjectName("danger" if running else "primary")
+        self.read_btn.style().unpolish(self.read_btn)
+        self.read_btn.style().polish(self.read_btn)
+        color = {"speaking": self.t["green"], "thinking": self.t["amber"],
+                 "error": self.t["danger"]}.get(kind, self.t["muted"])
+        if not message and kind == "off":
+            message = "ظلّل أي كلام واضغط الاختصار."
+        self.read_status.setText(("● " if running else "") + message)
+        self.read_status.setStyleSheet(f"color:{color};")
+        if kind == "thinking":
+            self.read_text.clear()
+
+    def set_read_text(self, text: str):
+        self.read_text.setPlainText(text)
+        bar = self.read_text.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def set_read_hotkey_status(self, text: str, ok: bool):
+        self.read_hotkey_status.setText(text)
+        self.read_hotkey_status.setStyleSheet(f"color:{self.t['green'] if ok else self.t['danger']};")
+        self.read_hotkey_edit.set_value(self.app.settings.read_hotkey)
+        self.update_hotkey_hint()
+        if not ok:
+            self.show_banner(text)
+
+    def set_llm_status(self, text: str, ok: bool):
+        self.llm_status.setText(text)
+        self.llm_status.setStyleSheet(f"color:{self.t['green'] if ok else self.t['danger']};")
+
+    def refresh_voices(self, full: bool = False):
+        from ..tts import VOICES
+
+        combo = self.voice_combo
+        combo.blockSignals(True)
+        combo.clear()
+        voices = self.app.list_tts_voices() if full else list(VOICES)
+        for short, label in voices:
+            combo.addItem(label, short)
+        cur = combo.findData(self.app.settings.tts_voice)
+        if cur < 0:
+            combo.addItem(self.app.settings.tts_voice, self.app.settings.tts_voice)
+            cur = combo.count() - 1
+        combo.setCurrentIndex(cur)
+        combo.blockSignals(False)
+
+    def _voice_changed(self):
+        self.app.update_setting("tts_voice", self.voice_combo.currentData() or "")
+
+    def refresh_speakers(self):
+        combo = self.speaker_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("سماعة Windows الافتراضية", "")
+        for n in self.app.list_speakers():
+            combo.addItem(n, n)
+        cur = combo.findData(self.app.settings.tts_output_device)
+        combo.setCurrentIndex(cur if cur >= 0 else 0)
+        combo.blockSignals(False)
 
     def set_bridge_hotkey_status(self, text: str, ok: bool):
         self.bridge_hotkey_status.setText(text)
@@ -668,6 +859,7 @@ class MainWindow(QMainWindow):
         s = self.app.settings
         self.hotkey_chip.setText(s.hotkey)
         self.bridge_chip.setText(s.bridge_hotkey or "—")
+        self.read_chip.setText(s.read_hotkey or "—")
         self.cancel_btn.setText("إلغاء")
         self.cancel_btn.setToolTip(f"اختصار الإلغاء: {s.cancel_hotkey}" if s.cancel_hotkey else "")
 

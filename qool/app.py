@@ -23,6 +23,7 @@ from .hotkey import HotkeyError, HotkeyManager, normalize_hotkey
 from .models import CATALOG, DownloadCancelled, delete_model, download, is_downloaded
 from .paster import Outcome, Paster
 from .pipeline import ModelMissing, Pipeline
+from .reader import Reader
 from .transcriber import gpu_memory_mb
 from .ui import theme
 from .ui.main_window import MainWindow
@@ -39,6 +40,9 @@ class QoolApp(QObject):
     sig_download = Signal(int, int)
     sig_download_done = Signal(bool, str)
     sig_model = Signal(str)
+    sig_reader = Signal(str, str)
+    sig_reader_text = Signal(str)
+    sig_llm_check = Signal(str, bool)
 
     def __init__(self, qapp: QApplication):
         super().__init__()
@@ -63,6 +67,8 @@ class QoolApp(QObject):
         self._bridge_waiting = False
         self._bridge_last_search = 0.0
         self._bridge_device_shown = ""
+        self.reader = Reader(self.settings, on_state=self.sig_reader.emit,
+                             on_text=self.sig_reader_text.emit)
 
         self.t = theme.tokens(self.settings.theme)
         qapp.setStyleSheet(theme.stylesheet(self.t))
@@ -78,6 +84,9 @@ class QoolApp(QObject):
         self.sig_download.connect(self.window.set_download_progress, Qt.QueuedConnection)
         self.sig_download_done.connect(self._on_download_done, Qt.QueuedConnection)
         self.sig_model.connect(self.window.set_model_status, Qt.QueuedConnection)
+        self.sig_reader.connect(self._on_reader_state, Qt.QueuedConnection)
+        self.sig_reader_text.connect(self.window.set_read_text, Qt.QueuedConnection)
+        self.sig_llm_check.connect(self.window.set_llm_status, Qt.QueuedConnection)
 
         # مؤقت الواجهة يعمل فقط أثناء التسجيل (لا استهلاك CPU في الخمول)
         self.level_timer = QTimer(self, interval=50, timeout=self._tick)
@@ -118,6 +127,10 @@ class QoolApp(QObject):
             ok_b, err_b = self.hotkeys.register("bridge", s.bridge_hotkey)
             self.window.set_bridge_hotkey_status(
                 f"اختصار الجسر {s.bridge_hotkey} مسجَّل بنجاح." if ok_b else err_b, ok_b)
+        if s.read_hotkey:
+            ok_r, err_r = self.hotkeys.register("read", s.read_hotkey)
+            self.window.set_read_hotkey_status(
+                f"اختصار القراءة {s.read_hotkey} مسجَّل بنجاح." if ok_r else err_r, ok_r)
 
     def _startup_model(self):
         s = self.settings
@@ -155,6 +168,8 @@ class QoolApp(QObject):
         menu.addSeparator()
         self.tray_bridge = QAction("تشغيل جسر الميتينج", self, triggered=self.toggle_bridge)
         menu.addAction(self.tray_bridge)
+        self.tray_read = QAction("اقرا النص المظلَّل", self, triggered=self.toggle_read)
+        menu.addAction(self.tray_read)
         menu.addSeparator()
         menu.addAction(QAction("إظهار النافذة", self, triggered=self.show_window))
         menu.addAction(QAction("خروج", self, triggered=self.quit))
@@ -193,6 +208,8 @@ class QoolApp(QObject):
             self.cancel()
         elif name == "bridge":
             self.toggle_bridge()
+        elif name == "read":
+            self.toggle_read()
 
     def toggle(self):
         self.controller.toggle()
@@ -522,6 +539,109 @@ class QoolApp(QObject):
             self.overlay.label.setText(f"● تسجيل {int(secs // 60):02d}:{int(secs % 60):02d}")
             self.overlay.set_level(self.recorder.level)
 
+    # ---------- القارئ ----------
+    def toggle_read(self):
+        """يقرا التحديد الحالي، أو يوقّف القراءة الشغالة."""
+        if self.reader.is_running():
+            self.reader.stop()
+            return
+        self._on_reader_state("thinking", "بياخد النص المظلَّل...")
+        threading.Thread(target=self._grab_and_read, daemon=True, name="read-selection").start()
+
+    def _grab_and_read(self):
+        try:
+            text = winapi.read_selection()
+            if not (text or "").strip():
+                text = winapi.get_clipboard_text() or ""   # مفيش تحديد؟ اقرا اللي في الحافظة
+                if text.strip():
+                    self.sig_reader.emit("thinking", "مفيش تحديد؛ بيقرا اللي في الحافظة...")
+        except Exception as e:
+            log.exception("تعذر قراءة التحديد")
+            self.sig_reader.emit("error", f"تعذر قراءة النص المظلَّل: {e}")
+            return
+        self.reader.start(text)
+
+    def read_text_now(self, text: str):
+        """زرار «اقرا» في الواجهة: يقرا نصًا معروضًا بالفعل."""
+        if self.reader.is_running():
+            self.reader.stop()
+            return
+        self.reader.start(text)
+
+    def _on_reader_state(self, state: str, message: str):
+        running = state in ("thinking", "speaking")
+        self.tray_read.setText("وقّف القراءة" if running else "اقرا النص المظلَّل")
+        self.window.set_read_state(state, message)
+
+    def apply_read_hotkey(self, spec):
+        s = self.settings
+        try:
+            spec = normalize_hotkey(spec)
+        except HotkeyError as e:
+            self.window.set_read_hotkey_status(str(e), False)
+            return
+        if spec in (s.hotkey, s.cancel_hotkey, s.bridge_hotkey):
+            self.window.set_read_hotkey_status("اختصار القراءة لازم يختلف عن باقي الاختصارات.", False)
+            return
+        old = s.read_hotkey
+        ok, err = self.hotkeys.register("read", spec)
+        if not ok:
+            if old:
+                self.hotkeys.register("read", old)
+            self.window.set_read_hotkey_status(err + (f" (ما زال {old} فعّالًا)" if old else ""), False)
+            return
+        s.read_hotkey = spec
+        s.save()
+        self.window.set_read_hotkey_status(f"اختصار القراءة {spec} مسجَّل بنجاح.", True)
+
+    def set_api_key(self, key: str):
+        self.settings.set_api_key(key)
+        self.settings.llm_model = "auto"      # المفتاح الجديد قد تكون موديلاته مختلفة
+        self.settings.save()
+        if key.strip():
+            self.check_api_key()
+        else:
+            self.window.set_llm_status("المفتاح اتمسح.", False)
+
+    def check_api_key(self):
+        """يتأكد إن المفتاح شغال ويختار أفضل موديل متاح — في خيط مستقل."""
+        key = self.settings.api_key()
+        if not key:
+            self.window.set_llm_status("محطّش مفتاح لسه.", False)
+            return
+        self.window.set_llm_status("بيتأكد من المفتاح...", True)
+
+        def work():
+            from . import llm
+            try:
+                model = llm.resolve_model(key, self.settings.llm_model)
+            except llm.LLMError as e:
+                self.sig_llm_check.emit(str(e), False)
+                return
+            self.settings.llm_model = model
+            self.settings.save()
+            self.sig_llm_check.emit(f"المفتاح شغّال. الموديل المستخدم: {model}", True)
+
+        threading.Thread(target=work, daemon=True, name="llm-check").start()
+
+    def list_speakers(self):
+        from .audio import list_output_devices
+        try:
+            return list_output_devices()
+        except Exception as e:
+            self.window.set_notice(f"تعذر قراءة أجهزة الصوت: {e}")
+            return []
+
+    def list_tts_voices(self):
+        from . import tts
+        return tts.list_voices()
+
+    def preview_voice(self):
+        """عيّنة قصيرة بالصوت والسرعة المختارين."""
+        if self.reader.is_running():
+            self.reader.stop("")
+        self.reader.start("أهلاً. كده هيبقى شكل الصوت والسرعة اللي اخترتها.", mode="raw")
+
     # ---------- الخروج ----------
     def quit(self):
         log.info("خروج")
@@ -529,6 +649,7 @@ class QoolApp(QObject):
             if self.bridge is not None:
                 self.bridge.stop()
                 self.bridge = None
+            self.reader.stop("")
             self.controller.cancel()
             if self.recorder.is_recording:
                 self.recorder.abort()

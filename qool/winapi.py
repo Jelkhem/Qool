@@ -265,7 +265,7 @@ def get_clipboard_text(attempts: int = 8, delay: float = 0.03) -> str | None:
 
 # ---------- لوحة المفاتيح ----------
 
-VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN, VK_V = 0x10, 0x11, 0x12, 0x5B, 0x5C, 0x56
+VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN, VK_V, VK_C = 0x10, 0x11, 0x12, 0x5B, 0x5C, 0x56, 0x43
 KEYEVENTF_KEYUP = 0x0002
 INPUT_KEYBOARD = 1
 QOOL_SIGNATURE = 0x51004F4F
@@ -306,12 +306,47 @@ def wait_modifiers_released(timeout: float = 2.0) -> bool:
     return not modifiers_down()
 
 
-def send_ctrl_v() -> tuple[bool, int]:
-    """يرسل Ctrl+V مرة واحدة. يرجع (نجاح إدراج كل الأحداث، رمز الخطأ)."""
-    seq = [(VK_CONTROL, 0), (VK_V, 0), (VK_V, KEYEVENTF_KEYUP), (VK_CONTROL, KEYEVENTF_KEYUP)]
+def _send_ctrl(vk: int) -> tuple[bool, int]:
+    """يرسل Ctrl+<مفتاح> مرة واحدة. يرجع (نجاح إدراج كل الأحداث، رمز الخطأ)."""
+    seq = [(VK_CONTROL, 0), (vk, 0), (vk, KEYEVENTF_KEYUP), (VK_CONTROL, KEYEVENTF_KEYUP)]
     arr = (INPUT * len(seq))()
-    for i, (vk, flags) in enumerate(seq):
+    for i, (k, flags) in enumerate(seq):
         arr[i].type = INPUT_KEYBOARD
-        arr[i].u.ki = KEYBDINPUT(vk, 0, flags, 0, QOOL_SIGNATURE)
+        arr[i].u.ki = KEYBDINPUT(k, 0, flags, 0, QOOL_SIGNATURE)
     n = user32.SendInput(len(seq), arr, ctypes.sizeof(INPUT))
     return n == len(seq), (ctypes.get_last_error() if n != len(seq) else 0)
+
+
+def send_ctrl_v() -> tuple[bool, int]:
+    return _send_ctrl(VK_V)
+
+
+def send_ctrl_c() -> tuple[bool, int]:
+    return _send_ctrl(VK_C)
+
+
+def read_selection(timeout: float = 0.7) -> str | None:
+    """ينسخ النص المظلَّل في النافذة الحالية ويرجّع محتوى الحافظة القديم مكانه.
+
+    يرجع None لو مفيش تحديد (الحافظة لم تتغير) أو لو تعذّر الإرسال.
+    """
+    before = user32.GetClipboardSequenceNumber()
+    old = get_clipboard_text()
+    if not wait_modifiers_released(1.5):  # الاختصار نفسه لسه مضغوط
+        return None
+    ok, _ = send_ctrl_c()
+    if not ok:
+        return None
+    end = time.monotonic() + timeout
+    text = None
+    while time.monotonic() < end:
+        time.sleep(0.03)
+        if user32.GetClipboardSequenceNumber() != before:
+            text = get_clipboard_text()
+            break
+    if old is not None and text is not None:
+        try:
+            set_clipboard_text(old)  # ما نضيّعش اللي كان ناسخه المستخدم
+        except ClipboardError:
+            pass
+    return text
