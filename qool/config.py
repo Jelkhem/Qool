@@ -54,7 +54,8 @@ class Settings:
     tts_engine: str = "gemini"         # gemini = ينطق العامية صح | edge = مجاني بلا حد بس فصيح
     tts_day: str = ""                  # تاريخ العدّاد (YYYY-MM-DD)
     tts_calls: int = 0                 # طلبات صوت Gemini النهاردة
-    tts_exhausted: bool = False        # خلص الحد النهاردة؟ يتصفّر مع أول يوم جديد
+    tts_exhausted: bool = False        # خلصت كل موديلات الصوت النهاردة؟ يتصفّر كل يوم
+    tts_dead: list = field(default_factory=list)   # موديلات صوت خلصت حصتها النهاردة
     gemini_voice: str = "Kore"
     speech_style: str = ""             # فارغ = التوجيه الافتراضي في tts.DEFAULT_STYLE
     tts_voice: str = "ar-EG-SalmaNeural"
@@ -67,6 +68,7 @@ class Settings:
         today = datetime.date.today().isoformat()
         if self.tts_day != today:
             self.tts_day, self.tts_calls, self.tts_exhausted = today, 0, False
+            self.tts_dead = []
 
     def voice_budget_left(self) -> bool:
         """الحد المجاني ١٠ طلبات في اليوم لكل موديل صوت."""
@@ -77,6 +79,17 @@ class Settings:
         self._roll_day()
         self.tts_calls += 1
         self.save()
+
+    def live_voice_models(self, all_models: list[str]) -> list[str]:
+        """الموديلات اللي لسه عندها رصيد النهاردة."""
+        self._roll_day()
+        return [m for m in all_models if m not in self.tts_dead]
+
+    def note_voice_model_dead(self, model: str) -> None:
+        self._roll_day()
+        if model not in self.tts_dead:
+            self.tts_dead.append(model)
+            self.save()
 
     def note_voice_exhausted(self) -> None:
         self._roll_day()

@@ -115,6 +115,7 @@ class Reader:
         self._mode = ""               # يتجاوز read_mode لهذه القراءة فقط (معاينة الصوت)
         self._edge_fallback = False   # صوت Gemini وقع، فبنكمّل على Edge
         self._gemini_voice = False    # بيتحدد مرة واحدة أول كل قراءة
+        self._voice_models: list[str] = []   # موديلات الصوت اللي لسه عندها رصيد
 
     # ---------- التحكم ----------
     def is_running(self) -> bool:
@@ -161,8 +162,13 @@ class Reader:
 
     def _pick_voice_engine(self) -> None:
         s = self.settings
-        self._gemini_voice = (s.tts_engine == "gemini" and bool(s.api_key())
-                              and s.voice_budget_left())
+        self._voice_models = []
+        if s.tts_engine == "gemini" and s.api_key() and s.voice_budget_left():
+            # الاكتشاف من الـAPI: أي موديل صوت جديد بيتحسب لوحده بـ١٠ طلبات زيادة
+            self._voice_models = s.live_voice_models(tts.discover_models(s.api_key()))
+            if not self._voice_models:
+                s.note_voice_exhausted()
+        self._gemini_voice = bool(self._voice_models)
         self._edge_fallback = not self._gemini_voice
         if s.tts_engine == "gemini" and not self._gemini_voice and s.api_key():
             self.on_state("thinking", "خلصت حصة صوت Gemini النهاردة — هنقرا بصوت Edge بالفصحى.")
@@ -243,7 +249,8 @@ class Reader:
                 s.note_voice_call()
                 yield from coalesce(tts.stream_gemini(
                     sentence, s.gemini_voice, s.api_key(),
-                    style=s.speech_style or tts.DEFAULT_STYLE, cancel=self._cancel))
+                    style=s.speech_style or tts.DEFAULT_STYLE, cancel=self._cancel,
+                    models=self._voice_models, on_exhausted=s.note_voice_model_dead))
                 return
             except llm.QuotaError as e:
                 # خلصت كل موديلات الصوت النهاردة — بلاش نحاول تاني لحد بكرة

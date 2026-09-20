@@ -225,3 +225,63 @@ def test_coalesce_keeps_the_tail():
 def test_coalesce_skips_empty_pieces():
     pieces = [np.zeros(0, dtype=np.float32), np.zeros(240, dtype=np.float32)]
     assert sum(p.size for p in coalesce(pieces, seconds=0.5)) == 240
+
+
+# ---------- تدوير موديلات الصوت وحصة اليوم ----------
+def test_rotation_moves_on_when_a_model_hits_its_daily_limit(monkeypatch):
+    calls, dead = [], []
+
+    def fake_stream(text, voice, api_key, model, style, cancel):
+        calls.append(model)
+        if model == "model-a":
+            raise llm.QuotaError("خلص")
+        yield np.zeros(240, dtype=np.float32)
+
+    monkeypatch.setattr(tts, "_stream_one", fake_stream)
+    out = list(tts.stream_gemini("أهلا", "Kore", "key", models=["model-a", "model-b"],
+                                 on_exhausted=dead.append))
+    assert calls == ["model-a", "model-b"]
+    assert dead == ["model-a"]          # الأول اتسجّل خلصان، التاني اشتغل
+    assert sum(p.size for p in out) == 240
+
+
+def test_rotation_raises_when_every_model_is_done(monkeypatch):
+    def fake_stream(text, voice, api_key, model, style, cancel):
+        raise llm.QuotaError("خلص")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(tts, "_stream_one", fake_stream)
+    with pytest.raises(llm.QuotaError):
+        list(tts.stream_gemini("أهلا", "Kore", "key", models=["a", "b"]))
+
+
+def test_rotation_with_no_models_left_is_a_quota_error():
+    with pytest.raises(llm.QuotaError):
+        list(tts.stream_gemini("أهلا", "Kore", "key", models=[]))
+
+
+def test_dead_models_are_skipped_then_reset_next_day(tmp_path):
+    from qool.config import Settings
+
+    s = Settings()
+    path = tmp_path / "settings.json"
+    s.save(path)
+    all_models = ["a", "b"]
+    assert s.live_voice_models(all_models) == ["a", "b"]
+    s.note_voice_model_dead("a")
+    assert s.live_voice_models(all_models) == ["b"]
+    s.tts_day = "2000-01-01"            # يوم جديد
+    assert s.live_voice_models(all_models) == ["a", "b"]
+    assert s.tts_calls == 0 and not s.tts_exhausted
+
+
+def test_discover_models_falls_back_when_offline(monkeypatch):
+    import urllib.error
+
+    monkeypatch.setattr(tts, "_tts_models_cache", None)
+
+    def boom(*a, **k):
+        raise urllib.error.URLError("no network")
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    assert tts.discover_models("key") == list(tts.GEMINI_TTS_MODELS)

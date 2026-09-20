@@ -24,9 +24,51 @@ VOICES = (
 DEFAULT_VOICE = VOICES[0][0]
 
 # --- صوت Gemini: موديل لغوي، بينطق العامية المصرية صح ويقبل توجيه بالكلام ---
-# الحد المجاني ١٠ طلبات في اليوم **لكل موديل**، فالتدوير بينهم بيضاعف عدد القراءات.
-GEMINI_TTS_MODELS = ("gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts")
+# الحد المجاني ١٠ طلبات في اليوم **لكل موديل**، فالتدوير بينهم بيزوّد عدد القراءات.
+# القائمة دي احتياطي بس؛ الأصل إننا نكتشفها من الـAPI عشان أي موديل جديد يتحسب لوحده.
+GEMINI_TTS_MODELS = ("gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts",
+                     "gemini-2.5-pro-preview-tts")
 GEMINI_TTS_MODEL = GEMINI_TTS_MODELS[0]
+_tts_models_cache: list[str] | None = None
+
+
+def _tts_rank(name: str) -> tuple[int, str]:
+    """flash الأول (أسرع وأرخص)، وبعدين الباقي."""
+    return (0 if "flash" in name else 1), name
+
+
+def discover_models(api_key: str, refresh: bool = False) -> list[str]:
+    """كل موديلات الصوت المتاحة للمفتاح ده، مرتّبة. لو الاكتشاف فشل بنرجّع القائمة الثابتة."""
+    global _tts_models_cache
+    with _lock:
+        if _tts_models_cache is not None and not refresh:
+            return list(_tts_models_cache)
+    import json
+    import urllib.error
+    import urllib.request
+
+    from . import llm
+
+    try:
+        req = urllib.request.Request(f"{llm.GEMINI_HOST}/models?pageSize=300")
+        req.add_header("x-goog-api-key", api_key)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            payload = json.load(r)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        log.warning("تعذّر اكتشاف موديلات الصوت (%s)؛ هنستخدم القائمة الثابتة", e)
+        return list(GEMINI_TTS_MODELS)
+    found = [
+        name for m in payload.get("models", [])
+        if "tts" in (name := m.get("name", "").removeprefix("models/")).lower()
+        and "generateContent" in m.get("supportedGenerationMethods", [])
+    ]
+    found.sort(key=_tts_rank)
+    if not found:
+        return list(GEMINI_TTS_MODELS)
+    with _lock:
+        _tts_models_cache = found
+    log.info("موديلات الصوت المتاحة: %s", ", ".join(found))
+    return list(found)
 GEMINI_VOICES = (
     ("Kore", "Kore — حريمي، واضح (الافتراضي)"),
     ("Sulafat", "Sulafat — حريمي، دافئ"),
@@ -154,29 +196,39 @@ def _to_float(b64: str) -> np.ndarray:
 
 
 def stream_gemini(text: str, voice: str, api_key: str, model: str = "",
-                  style: str = DEFAULT_STYLE, cancel=None):
+                  style: str = DEFAULT_STYLE, cancel=None, models: list[str] | None = None,
+                  on_exhausted=None):
     """نطق بموديل Gemini الصوتي، بالتدفق: أول جزء صوت بيوصل خلال ~١.٢ ثانية
     بدل ما نستنى الجملة كلها تتولّد (~٩ ثواني).
 
-    الحد المجاني ١٠ طلبات في اليوم **لكل موديل**، فلما واحد يخلص بنعدّي على اللي بعده.
+    الحد المجاني ١٠ طلبات في اليوم **لكل موديل**، فلما واحد يخلص بنعدّي على اللي بعده
+    وبنبلّغ `on_exhausted(model)` عشان ما نضيّعش وقت في تجربته تاني النهاردة.
     """
+    from . import llm
+
     text = (text or "").strip()
     if not text or not any(ch.isalnum() for ch in text):
         return
-    models = [model] if model else list(GEMINI_TTS_MODELS)
+    if model:
+        queue = [model]
+    elif models is None:
+        queue = list(GEMINI_TTS_MODELS)
+    else:
+        queue = list(models)      # قائمة فاضية = خلص كل حاجة، مش «استخدم الافتراضي»
+    if not queue:
+        raise llm.QuotaError("خلصت حصة كل موديلات الصوت النهاردة.")
     last: Exception | None = None
-    for i, m in enumerate(models):
+    for i, m in enumerate(queue):
         try:
             yield from _stream_one(text, voice, api_key, m, style, cancel)
             return
-        except Exception as e:
-            from . import llm
-
-            # الحصة بتخلص لكل موديل على حدة؛ أي غلطة تانية معناها نوقف
-            if not isinstance(e, llm.QuotaError) or i == len(models) - 1:
-                raise
-            log.info("حصة %s خلصت؛ بنجرّب %s", m, models[i + 1])
+        except llm.QuotaError as e:
             last = e
+            if on_exhausted is not None:
+                on_exhausted(m)
+            if i == len(queue) - 1:
+                raise
+            log.info("حصة %s خلصت؛ بنجرّب %s", m, queue[i + 1])
     if last is not None:
         raise last
 
