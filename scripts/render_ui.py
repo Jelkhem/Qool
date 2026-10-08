@@ -52,10 +52,16 @@ w.record_btn._shown_level = 0.6
 qapp.processEvents()
 w.grab().save(str(out_dir / f"recording_{mode}.png"))
 
-w.pages.setCurrentIndex(1)
-w.nav_group.button(1).setChecked(True)
+w.pages.setCurrentIndex(3)
+w.nav_group.button(3).setChecked(True)
 qapp.processEvents()
 w.grab().save(str(out_dir / f"settings_{mode}.png"))
+
+for index, name in ((1, "reader"), (2, "bridge")):
+    w.pages.setCurrentIndex(index)
+    w.nav_group.button(index).setChecked(True)
+    qapp.processEvents()
+    w.grab().save(str(out_dir / f"{name}_{mode}.png"))
 
 ov = Overlay()
 ov.set_level(0.7)

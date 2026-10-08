@@ -4,13 +4,13 @@ from __future__ import annotations
 import ctypes
 
 DARK = dict(
-    bg="#0F1115", surface="#171A21", surface2="#1F232C", border="#2A2F3A", text="#E8EAED",
-    muted="#9AA0A6", accent="#7C5CFF", accent_hover="#8F74FF", on_accent="#FFFFFF",
+    bg="#101B20", surface="#17262D", surface2="#21343C", border="#30464F", text="#ECF4F4",
+    muted="#A1B7BD", accent="#167D8D", accent_hover="#2393A4", on_accent="#FFFFFF",
     red="#FF4D5E", amber="#FFB020", green="#2BD576", danger="#FF6B6B",
 )
 LIGHT = dict(
-    bg="#F4F5F9", surface="#FFFFFF", surface2="#EEF0F5", border="#E1E4EC", text="#1B1D22",
-    muted="#6B7280", accent="#6D4AFF", accent_hover="#5B38F0", on_accent="#FFFFFF",
+    bg="#F3F6F5", surface="#FFFFFF", surface2="#EDF3F2", border="#DCE6E3", text="#193630",
+    muted="#60766F", accent="#176B60", accent_hover="#11574E", on_accent="#FFFFFF",
     red="#E5354A", amber="#D98E00", green="#12A150", danger="#D93025",
 )
 
@@ -36,12 +36,14 @@ def tokens(mode: str = "system") -> dict:
 
 def stylesheet(t: dict) -> str:
     return f"""
-    QWidget {{ background: {t['bg']}; color: {t['text']}; font-family: {FONT_FAMILY}; font-size: 10pt; }}
+    QWidget#appRoot, QMainWindow, QDialog {{ background: {t['bg']}; }}
+    QWidget {{ background: transparent; color: {t['text']}; font-family: {FONT_FAMILY}; font-size: 11pt; }}
     QLabel {{ background: transparent; }}
-    QLabel#h1 {{ font-size: 18pt; font-weight: 600; }}
+    QLabel#badge {{ background: {t["surface2"]}; color: {t["muted"]}; border-radius: 12px; padding: 8px 14px; font-size: 10pt; }}
+    QLabel#h1 {{ font-size: 24pt; font-weight: 600; }}
     QLabel#h2 {{ font-size: 11.5pt; font-weight: 600; }}
     QLabel#muted {{ color: {t['muted']}; }}
-    QLabel#small {{ color: {t['muted']}; font-size: 9pt; }}
+    QLabel#small {{ color: {t['muted']}; font-size: 10pt; }}
     QLabel#status {{ font-size: 13pt; font-weight: 600; }}
     QLabel#timer {{ font-size: 16pt; font-weight: 300; font-family: "Segoe UI Variable Display", "Segoe UI"; }}
     QLabel#kbd {{ background: {t['surface2']}; border: 1px solid {t['border']}; border-bottom: 3px solid {t['border']};
@@ -53,6 +55,7 @@ def stylesheet(t: dict) -> str:
 
     QPushButton {{ background: {t['surface2']}; border: 1px solid {t['border']}; border-radius: 10px;
                   padding: 8px 16px; font-weight: 500; }}
+    QPushButton:focus {{ border: 1px solid {t["accent"]}; }}
     QPushButton:hover {{ border-color: {t['accent']}; }}
     QPushButton:pressed {{ background: {t['border']}; }}
     QPushButton:disabled {{ color: {t['muted']}; border-color: {t['surface2']}; }}
