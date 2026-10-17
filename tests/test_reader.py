@@ -285,3 +285,43 @@ def test_discover_models_falls_back_when_offline(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", boom)
     assert tts.discover_models("key") == list(tts.GEMINI_TTS_MODELS)
+
+
+def test_new_reading_survives_a_slow_previous_one(monkeypatch):
+    """قراءة قديمة عالقة في الشبكة ما تلغيش القراءة اللي بعدها (كانت بتلغيها)."""
+    import threading
+    import time
+
+    import numpy as np
+
+    from qool import reader as R
+    from qool.config import Settings
+
+    slow = threading.Event()
+
+    def synth(self, sentence, cancel):
+        if "قديم" in sentence:
+            slow.wait(5)
+        for _ in range(60):
+            yield np.zeros(1600, dtype=np.float32)
+
+    monkeypatch.setattr(R.Reader, "_sentences", lambda self, text, cancel: iter([text]))
+    monkeypatch.setattr(R.Reader, "_synth", synth)
+    monkeypatch.setattr(R.Reader, "_play", lambda self, pcm, cancel: (time.sleep(0.02), True)[1])
+    monkeypatch.setattr(R.Reader, "_pick_voice_engine", lambda self: None)
+    monkeypatch.setattr(R.Reader, "_drain", lambda self: None)
+    monkeypatch.setattr(R.Reader, "_close_stream", lambda self: None)
+
+    rd = R.Reader(Settings(), on_state=lambda s, m: None, on_text=lambda t: None)
+    try:
+        rd.start("نص قديم طويل")
+        time.sleep(0.2)
+        rd.start("نص جديد")          # stop() هيستسلم بعد ثانيتين والقديم لسه شغال
+        new_cancel = rd._cancel
+        slow.set()                   # القديم فاق وخلّص: ما ينفعش يلغي الجديد
+        time.sleep(0.6)
+        assert not new_cancel.is_set(), "القراءة القديمة لغت الجديدة"
+        assert rd.is_running()
+    finally:
+        slow.set()
+        rd.stop("")

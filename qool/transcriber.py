@@ -118,6 +118,8 @@ class Transcriber:
 
         reason = ""
         want_gpu = device_pref in ("auto", "cuda")
+        if device_pref == "cuda":
+            self.gpu_broken = ""    # المستخدم اختار الكارت صراحةً: نجرب تاني
         if want_gpu and self.gpu_broken:
             reason = self.gpu_broken
         elif want_gpu:

@@ -647,7 +647,8 @@ class QoolApp(QObject):
                 return
             detail = ("المفتاح شغال. الموديلات المتاحة: " + "، ".join(models)) if models else "المفتاح شغال."
             self.sig_groq.emit(detail, True)
-        self.worker.submit(self._guard, job)
+        # خيط مستقل: ما يستناش ورا تفريغ شغّال في عامل التفريغ الوحيد
+        threading.Thread(target=job, daemon=True, name="groq-check").start()
 
     def set_stt_backend(self, backend: str):
         self.settings.stt_backend = backend

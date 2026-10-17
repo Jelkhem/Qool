@@ -131,8 +131,9 @@ class Reader:
             return
         self._mode = mode
         self._edge_fallback = False
-        self._cancel = threading.Event()
-        self._thread = threading.Thread(target=self._run, args=(text,), name="reader", daemon=True)
+        cancel = threading.Event()
+        self._cancel = cancel
+        self._thread = threading.Thread(target=self._run, args=(text, cancel), name="reader", daemon=True)
         self._thread.start()
 
     def stop(self, message: str = "وقفت القراءة.") -> None:
@@ -174,9 +175,9 @@ class Reader:
             self.on_state("thinking", "خلصت حصة صوت Gemini النهاردة — هنقرا بصوت Edge بالفصحى.")
 
     # ---------- التشغيل (الخيط الرئيسي للقراءة) ----------
-    def _run(self, text: str) -> None:
+    def _run(self, text: str, cancel: threading.Event) -> None:
         q: queue.Queue = queue.Queue(maxsize=_QUEUE_CHUNKS)
-        producer = threading.Thread(target=self._produce, args=(text, q),
+        producer = threading.Thread(target=self._produce, args=(text, q, cancel),
                                     name="reader-synth", daemon=True)
         try:
             self.on_state("thinking", "بيقرا النص..." if self.mode == "raw" else "بيفهم ويلخّص...")
@@ -184,7 +185,7 @@ class Reader:
             heard = False
             while True:
                 item = q.get()
-                if item is None or self._cancel.is_set():
+                if item is None or cancel.is_set():
                     break
                 kind, payload = item
                 if kind == "error":
@@ -196,52 +197,54 @@ class Reader:
                     if not heard:
                         heard = True
                         self.on_state("speaking", "بيتكلم...")
-                    if not self._play(payload):
+                    if not self._play(payload, cancel):
                         break
-            if not self._cancel.is_set():
+            if not cancel.is_set():
                 self._drain()
                 self.on_state("off", "خلص." if heard else "مفيش حاجة تتقال.")
         except (llm.LLMError, tts.TTSError, AudioError) as e:
-            if not self._cancel.is_set():
+            if not cancel.is_set():
                 self.on_state("error", str(e))
         except Exception as e:
             log.exception("فشل غير متوقع في القارئ")
-            if not self._cancel.is_set():
+            if not cancel.is_set():
                 self.on_state("error", f"حصل خطأ غير متوقع: {e}")
         finally:
-            self._cancel.set()          # يفكّ المولّد لو كان مستني مكان في الطابور
-            self._close_stream()
+            cancel.set()                # يفكّ المولّد لو كان مستني مكان في الطابور
+            # لو قراءة جديدة بدأت وإحنا لسه بنخلّص، ما نقفلش مجرى صوتها
+            if self._cancel is cancel:
+                self._close_stream()
 
     # ---------- التوليد (الخيط التاني) ----------
-    def _produce(self, text: str, q: queue.Queue) -> None:
+    def _produce(self, text: str, q: queue.Queue, cancel: threading.Event) -> None:
         """يولّد الصوت ويحطّه في الطابور وهو بيتقال، فالتوليد دايمًا سابق التشغيل."""
         spoken: list[str] = []
         try:
             self._pick_voice_engine()
-            for sentence in self._sentences(text):
-                if self._cancel.is_set():
+            for sentence in self._sentences(text, cancel):
+                if cancel.is_set():
                     return
                 spoken.append(sentence)
-                self._put(q, ("text", " ".join(spoken)))
-                for pcm in self._synth(sentence):
-                    if self._cancel.is_set():
+                self._put(q, ("text", " ".join(spoken)), cancel)
+                for pcm in self._synth(sentence, cancel):
+                    if cancel.is_set():
                         return
-                    self._put(q, ("pcm", pcm))
+                    self._put(q, ("pcm", pcm), cancel)
         except Exception as e:
-            self._put(q, ("error", e))
+            self._put(q, ("error", e), cancel)
         finally:
-            self._put(q, None)
+            self._put(q, None, cancel)
 
-    def _put(self, q: queue.Queue, item) -> None:
+    def _put(self, q: queue.Queue, item, cancel: threading.Event) -> None:
         """حطّ في الطابور من غير ما تعلّق لو التشغيل وقف."""
-        while not self._cancel.is_set():
+        while not cancel.is_set():
             try:
                 q.put(item, timeout=0.2)
                 return
             except queue.Full:
                 continue
 
-    def _synth(self, sentence: str):
+    def _synth(self, sentence: str, cancel: threading.Event):
         """أجزاء صوت لقطعة. Gemini بيدفّق فبنشغّل وهو بيولّد؛ Edge بيرجّع مرة واحدة."""
         s = self.settings
         if self._gemini_voice:
@@ -249,7 +252,7 @@ class Reader:
                 s.note_voice_call()
                 yield from coalesce(tts.stream_gemini(
                     sentence, s.gemini_voice, s.api_key(),
-                    style=s.speech_style or tts.DEFAULT_STYLE, cancel=self._cancel,
+                    style=s.speech_style or tts.DEFAULT_STYLE, cancel=cancel,
                     models=self._voice_models, on_exhausted=s.note_voice_model_dead))
                 return
             except llm.QuotaError as e:
@@ -275,7 +278,7 @@ class Reader:
             return (60, 220) if first else (400, 4000)
         return (40, 320)   # Edge مجاني بلا حد، فبنقطّع أكتر عشان يبدأ أسرع
 
-    def _sentences(self, text: str):
+    def _sentences(self, text: str, cancel: threading.Event):
         """مولّد القطع: من الموديل لو في تلخيص، أو من النص نفسه في وضع «زي ما هو»."""
         first = True
         if self.mode == "raw":
@@ -299,14 +302,14 @@ class Reader:
             for sent in sents:
                 yield speakable(sent)
                 first = False
-            if self._cancel.is_set():
+            if cancel.is_set():
                 return
         mn, mx = self._chunk_size(first)
         sents, _ = take_sentences(buf, flush=True, min_len=mn, max_len=mx)
         for sent in sents:
             yield speakable(sent)
 
-    def _stream_llm(self, text: str, model: str):
+    def _stream_llm(self, text: str, model: str, cancel: threading.Event):
         """الموديلات المجانية بتوقع تحت الضغط، فبنجرّب غيرها — بس قبل ما يتقال أي كلام."""
         key = self.settings.api_key()
         tried = [model]
@@ -316,7 +319,7 @@ class Reader:
             try:
                 for piece in llm.stream_explain(text, api_key=key, model=tried[-1],
                                                 mode=self.mode, dialect=self.dialect,
-                                                cancel=self._cancel):
+                                                cancel=cancel):
                     said_something = True
                     yield piece
                 if tried[-1] != self.settings.llm_model:
@@ -380,17 +383,17 @@ class Reader:
             except Exception:
                 pass
 
-    def _play(self, pcm: np.ndarray) -> bool:
+    def _play(self, pcm: np.ndarray, cancel: threading.Event) -> bool:
         """يكتب الموجة على الجهاز على دفعات صغيرة عشان «إيقاف» يستجيب فورًا."""
         stream = self._open_stream()
         step = 2048
         for i in range(0, len(pcm), step):
-            if self._cancel.is_set():
+            if cancel.is_set():
                 return False
             try:
                 stream.write(pcm[i:i + step])
             except Exception as e:
-                if self._cancel.is_set():
+                if cancel.is_set():
                     return False
                 raise AudioError(f"تعذّر تشغيل الصوت ({e}).") from None
         return True

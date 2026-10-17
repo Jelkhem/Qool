@@ -46,6 +46,14 @@ class Pipeline:
             self.on_load(info)
         return info
 
+    def _local_model_ready(self) -> bool:
+        """هل يوجد نموذج محلي جاهز فعلًا نرجع له لو الأونلاين فشل؟"""
+        try:
+            resolve_model(self.settings)
+            return True
+        except ModelMissing:
+            return False
+
     def uses_groq(self) -> bool:
         return self.settings.stt_backend == "groq" and bool(self.settings.groq_key())
 
@@ -60,7 +68,9 @@ class Pipeline:
             segments, took = groq_stt.transcribe(audio, api_key=s.groq_key(), model=s.groq_model,
                                                  prompt=prompt)
         except groq_stt.GroqError as e:
-            if not s.groq_fallback_local:
+            if not s.groq_fallback_local or not self._local_model_ready():
+                # مفيش نموذج محلي (طبيعي في الوضع الأونلاين): نقول السبب الحقيقي
+                # بدل رسالة «النموذج غير منزَّل» اللي مالهاش معنى هنا
                 raise
             log.warning("فشل التفريغ على Groq، الرجوع للجهاز: %s", e)
             self._groq_notice = f"تعذّر التفريغ أونلاين ({e}) — تم التفريغ على الجهاز."

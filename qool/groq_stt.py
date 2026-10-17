@@ -76,7 +76,35 @@ def wav_bytes(audio: np.ndarray, rate: int = 16000) -> bytes:
     return buf.getvalue()
 
 
-def _multipart(fields: dict[str, str], wav: bytes) -> tuple[bytes, str]:
+def flac_bytes(audio: np.ndarray, rate: int = 16000) -> bytes | None:
+    """نفس الصوت مضغوطًا بلا فقد (حوالي نصف الحجم أو أقل)، أو None لو الترميز فشل.
+
+    الضغط مهم: تسجيل ١٥ دقيقة = ~٢٧ MB كـWAV، أكبر من حد الرفع.
+    """
+    try:
+        import io
+
+        import av
+
+        pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2")
+        buf = io.BytesIO()
+        with av.open(buf, "w", format="flac") as container:
+            stream = container.add_stream("flac", rate=rate)
+            stream.layout, stream.format = "mono", "s16"
+            frame = av.AudioFrame.from_ndarray(pcm.reshape(1, -1), format="s16", layout="mono")
+            frame.rate = rate
+            for packet in stream.encode(frame):
+                container.mux(packet)
+            for packet in stream.encode(None):
+                container.mux(packet)
+        return buf.getvalue()
+    except Exception as e:  # av مش موجودة أو الترميز فشل: نكمّل بـWAV
+        log.warning("تعذّر ضغط الصوت FLAC، هيترفع WAV: %s", e)
+        return None
+
+
+def _multipart(fields: dict[str, str], wav: bytes, filename: str = "audio.wav",
+               media_type: str = "audio/wav") -> tuple[bytes, str]:
     boundary = f"----qool{uuid.uuid4().hex}"
     out = bytearray()
     for name, value in fields.items():
@@ -84,17 +112,26 @@ def _multipart(fields: dict[str, str], wav: bytes) -> tuple[bytes, str]:
             continue
         out += f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n".encode()
         out += value.encode("utf-8") + b"\r\n"
-    out += f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n".encode()
-    out += b"Content-Type: audio/wav\r\n\r\n" + wav + b"\r\n"
+    out += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+            f"filename=\"{filename}\"\r\n").encode()
+    out += f"Content-Type: {media_type}\r\n\r\n".encode() + wav + b"\r\n"
     out += f"--{boundary}--\r\n".encode()
     return bytes(out), f"multipart/form-data; boundary={boundary}"
 
 
 def _error(e: urllib.error.HTTPError) -> GroqError:
+    raw = ""
     try:
-        detail = json.loads(e.read().decode("utf-8", "replace")).get("error", {}).get("message", "")
+        raw = e.read().decode("utf-8", "replace")
+        detail = json.loads(raw).get("error", {}).get("message", "")
     except Exception:
         detail = ""
+    if e.code == 403 and not detail:
+        # Cloudflare قدّام Groq بيرد 403 بجسم مش JSON (مثلًا "error code: 1010")
+        # والمفتاح نفسه سليم؛ ما نخليش المستخدم يمسح مفتاح شغّال.
+        return GroqError("الشبكة أو الحماية قدّام Groq رفضت الطلب (مش مشكلة في المفتاح). "
+                         "جرّب شبكة تانية أو استخدم التفريغ على الجهاز."
+                         + (f" [{raw.strip()[:60]}]" if raw.strip() else ""))
     if e.code in (401, 403):
         return GroqAuthError("مفتاح Groq مرفوض. راجع المفتاح في الإعدادات." + (f" ({detail})" if detail else ""))
     if e.code == 413:
@@ -113,14 +150,17 @@ def transcribe(audio: np.ndarray, *, api_key: str, model: str = DEFAULT_MODEL, l
     problem = key_problem(api_key)
     if problem:
         raise GroqAuthError(problem)
-    wav = wav_bytes(audio, rate)
-    size_mb = len(wav) / 2**20
+    body_audio, filename, media_type = flac_bytes(audio, rate), "audio.flac", "audio/flac"
+    if body_audio is None:
+        body_audio, filename, media_type = wav_bytes(audio, rate), "audio.wav", "audio/wav"
+    size_mb = len(body_audio) / 2**20
     if size_mb > MAX_UPLOAD_MB:
-        raise GroqError(f"حجم الصوت {size_mb:.0f} MB أكبر من حد الرفع ({MAX_UPLOAD_MB} MB). "
-                        "سجّل مقطعًا أقصر أو استخدم التفريغ المحلي.")
+        minutes = len(audio) / rate / 60
+        raise GroqError(f"التسجيل ({minutes:.0f} دقيقة) أكبر من حد الرفع ({MAX_UPLOAD_MB} MB). "
+                        "سجّل مقطعًا أقصر أو استخدم التفريغ على الجهاز.")
     body, content_type = _multipart(
         {"model": model, "language": language, "prompt": prompt[:800],
-         "response_format": "verbose_json", "temperature": "0"}, wav)
+         "response_format": "verbose_json", "temperature": "0"}, body_audio, filename, media_type)
     req = urllib.request.Request(f"{HOST}/audio/transcriptions", data=body, method="POST")
     req.add_header("Authorization", f"Bearer {api_key}")
     req.add_header("Content-Type", content_type)
@@ -139,7 +179,8 @@ def transcribe(audio: np.ndarray, *, api_key: str, model: str = DEFAULT_MODEL, l
     if not segments:
         text = (data.get("text") or "").strip()
         segments = [Segment(text, 0.0, float(len(audio) / rate))] if text else []
-    log.info("تفريغ Groq: صوت=%.1fث رفع=%.1fMB زمن=%.2fث موديل=%s", len(audio) / rate, size_mb, took, model)
+    log.info("تفريغ Groq: صوت=%.1fث رفع=%.1fMB (%s) زمن=%.2fث موديل=%s",
+             len(audio) / rate, size_mb, filename.split(".")[-1], took, model)
     return segments, took
 
 

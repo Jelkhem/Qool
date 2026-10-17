@@ -56,7 +56,8 @@ def test_request_carries_key_model_and_audio():
     assert seen["url"].endswith("/audio/transcriptions")
     assert seen["auth"] == f"Bearer {KEY}"
     assert b'name="model"' in seen["body"] and b"whisper-large-v3-turbo" in seen["body"]
-    assert b'name="language"' in seen["body"] and b"RIFF" in seen["body"]
+    assert b'name="language"' in seen["body"]
+    assert b"fLaC" in seen["body"] or b"RIFF" in seen["body"]   # مضغوط أو خام
     assert segments == [Segment("أهلاً", 0.0, 1.0)] and took >= 0
 
 
@@ -87,11 +88,36 @@ def test_missing_key_is_rejected_before_any_request():
             groq_stt.transcribe(AUDIO, api_key="")
 
 
-def test_oversized_audio_is_rejected_locally():
-    big = np.zeros(16000 * 60 * 30, dtype=np.float32)  # ~55 MB
+def test_oversized_audio_is_rejected_locally(monkeypatch):
+    monkeypatch.setattr(groq_stt, "MAX_UPLOAD_MB", 0.001)
     with patch("urllib.request.urlopen", lambda *a, **k: pytest.fail("ما كانش المفروض يرفع")):
         with pytest.raises(groq_stt.GroqError, match="حد الرفع"):
-            groq_stt.transcribe(big, api_key=KEY)
+            groq_stt.transcribe(AUDIO, api_key=KEY)
+
+
+def test_long_audio_is_compressed_enough_to_upload():
+    """تسجيل ١٥ دقيقة كـWAV = ~٢٧ MB (فوق الحد)؛ لازم الضغط ينزّله تحته."""
+    t = np.linspace(0, 900, 16000 * 900, dtype=np.float32)
+    speech = (0.3 * np.sin(2 * np.pi * 180 * t) * (0.5 + 0.5 * np.sin(2 * np.pi * 2.3 * t))).astype(np.float32)
+    wav_mb = len(groq_stt.wav_bytes(speech)) / 2**20
+    flac = groq_stt.flac_bytes(speech)
+    assert flac is not None, "الضغط لازم يشتغل (av مثبتة)"
+    flac_mb = len(flac) / 2**20
+    assert wav_mb > groq_stt.MAX_UPLOAD_MB, "الاختبار نفسه بايظ لو الـWAV بقى تحت الحد"
+    assert flac_mb < groq_stt.MAX_UPLOAD_MB, f"المضغوط {flac_mb:.1f} MB لسه فوق الحد"
+
+
+def test_falls_back_to_wav_when_compression_fails(monkeypatch):
+    monkeypatch.setattr(groq_stt, "flac_bytes", lambda audio, rate=16000: None)
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["body"] = req.data
+        return _resp({"text": "ok"})
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        groq_stt.transcribe(AUDIO, api_key=KEY)
+    assert b"RIFF" in seen["body"] and b'filename="audio.wav"' in seen["body"]
 
 
 @pytest.mark.parametrize("code,exc", [(401, groq_stt.GroqAuthError), (429, groq_stt.GroqQuotaError),
@@ -134,6 +160,7 @@ def test_pipeline_falls_back_to_local_when_groq_fails(monkeypatch):
         from qool.transcriber import TranscriptResult
         return TranscriptResult([Segment("النص من الجهاز", 0.0, 2.0)], 2.0, 2.0, 1.0, "cpu")
 
+    monkeypatch.setattr(Pipeline, "_local_model_ready", lambda self: True)
     monkeypatch.setattr(p.transcriber, "transcribe", fake_local)
     from qool.transcriber import LoadInfo
     monkeypatch.setattr(Pipeline, "load", lambda self, force_cpu=False: LoadInfo("cpu", "int8", 1.0, "turbo"))
@@ -192,3 +219,14 @@ def test_dictated_arabic_never_reaches_the_network():
             groq_stt.transcribe(AUDIO, api_key="بسم الله الرحمن الرحيم")
         with pytest.raises(groq_stt.GroqAuthError, match="حروف عربية"):
             groq_stt.check_key("بسم الله الرحمن الرحيم")
+
+
+def test_groq_error_is_kept_when_there_is_no_local_model(monkeypatch):
+    """في الوضع الأونلاين مفيش نموذج منزَّل، فلازم نقول سبب فشل الأونلاين
+    مش «النموذج غير منزَّل»، وإلا المستخدم يضيع ومعاه التسجيل."""
+    s = _settings()
+    p = Pipeline(s)
+    monkeypatch.setattr(Pipeline, "_local_model_ready", lambda self: False)
+    with patch.object(groq_stt, "transcribe", side_effect=groq_stt.GroqQuotaError("خلص الحد المجاني")):
+        with pytest.raises(groq_stt.GroqQuotaError, match="الحد المجاني"):
+            p.process_audio(AUDIO)
