@@ -94,6 +94,7 @@ class Transcriber:
         self.info: LoadInfo | None = None
         self._key = None
         self.last_used = 0.0
+        self.gpu_broken = ""  # سبب فشل الكارت في هذه الجلسة: لا نعيد المحاولة عليه
 
     @property
     def loaded(self) -> bool:
@@ -117,7 +118,9 @@ class Transcriber:
 
         reason = ""
         want_gpu = device_pref in ("auto", "cuda")
-        if want_gpu:
+        if want_gpu and self.gpu_broken:
+            reason = self.gpu_broken
+        elif want_gpu:
             setup_cuda_dll_paths()
             try:
                 import ctranslate2
@@ -193,6 +196,8 @@ class Transcriber:
                 log.warning("فشل التفريغ على GPU، إعادة المحاولة على CPU: %s", e)
                 fallback = "نفدت ذاكرة كارت الشاشة أثناء التفريغ؛ تم التحويل إلى CPU" if _is_oom(e) \
                     else f"خطأ في GPU أثناء التفريغ؛ تم التحويل إلى CPU ({str(e)[:120]})"
+                if not _is_oom(e):  # عطل دائم (مكتبات CUDA ناقصة مثلًا): لا نعيد المحاولة على الكارت
+                    self.gpu_broken = f"تعطّل CUDA في هذه الجلسة ({str(e)[:120]})"
                 self.unload()
                 reload_cpu()
                 t = time.perf_counter()

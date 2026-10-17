@@ -1,0 +1,16 @@
+# Python 3.12 (x64) — نسخة أجهزة بدون كارت NVIDIA: بدون مكتبات CUDA (توفير ~1.3 GB)
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+onnxruntime==1.30.0
+av==18.1.0
+tokenizers==0.23.2
+huggingface-hub==1.31.0
+PySide6==6.11.2
+sounddevice==0.5.6
+numpy==2.3.5
+psutil==7.2.2
+comtypes==1.4.16
+# القارئ: أصوات Edge النيورال (مجانية، بدون مفتاح)
+edge-tts==7.2.8
+# للاختبارات
+pytest==9.1.1

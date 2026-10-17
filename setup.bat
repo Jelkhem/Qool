@@ -31,8 +31,15 @@ if not exist ".venv\Scripts\python.exe" (
   uv venv .venv --python 3.12 || goto :fail
 )
 
-echo [2/4] تثبيت المكتبات ^(قد يستغرق عدة دقائق أول مرة؛ مكتبات CUDA حوالي 1.3 GB^)...
-uv pip install --python .venv\Scripts\python.exe -r requirements.txt || goto :fail
+rem أجهزة بدون كارت NVIDIA لا تحتاج مكتبات CUDA ^(~1.3 GB^)
+set "REQ=requirements.txt"
+powershell -NoProfile -Command "if (Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match 'NVIDIA' }) { exit 0 } else { exit 1 }" >nul 2>nul
+if errorlevel 1 (
+  set "REQ=requirements-cpu.txt"
+  echo [معلومة] لم يُعثر على كارت NVIDIA؛ سيعمل التطبيق على المعالج ^(CPU^) بدون تنزيل مكتبات CUDA.
+)
+echo [2/4] تثبيت المكتبات من %REQ% ^(قد يستغرق عدة دقائق أول مرة^)...
+uv pip install --python .venv\Scripts\python.exe -r %REQ% || goto :fail
 rem اجعل الحزمة qool متاحة من أي مجلد تشغيل
 .venv\Scripts\python.exe -c "import sysconfig, pathlib; pathlib.Path(sysconfig.get_paths()['purelib'], 'qool_project.pth').write_text(r'%~dp0'.rstrip('\\'), encoding='utf-8')" || goto :fail
 
