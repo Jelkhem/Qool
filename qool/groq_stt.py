@@ -40,6 +40,29 @@ class GroqQuotaError(GroqError):
     pass
 
 
+_INVISIBLE = "".join(chr(c) for c in (0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C,
+                                      0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069, 0xFEFF))
+
+
+def normalize_key(raw: str) -> str:
+    """ينضّف المفتاح الملصوق: مسافات، أسطر، وعلامات اتجاه خفية بتتلزق مع النسخ في واجهة عربية."""
+    return "".join(c for c in (raw or "") if c not in _INVISIBLE).strip()
+
+
+def key_problem(key: str) -> str:
+    """رسالة بالعربي لو المفتاح مش شكله مفتاح Groq، وإلا نص فاضي."""
+    if not key:
+        return "مفيش مفتاح. الصق مفتاح Groq هنا."
+    if not key.isascii():
+        return ("ده كلام مش مفتاح (فيه حروف عربية). المفتاح بيبدأ بـ gsk_ وكله إنجليزي وأرقام — "
+                "انسخه من صفحة المفاتيح والصقه هنا.")
+    if " " in key:
+        return "المفتاح فيه مسافات. انسخه تاني من صفحة المفاتيح."
+    if not key.startswith("gsk_") or len(key) < 20:
+        return "شكل المفتاح مش مظبوط. المفتاح الصحيح بيبدأ بـ gsk_ وطوله أكبر من ده."
+    return ""
+
+
 def wav_bytes(audio: np.ndarray, rate: int = 16000) -> bytes:
     """يحوّل الصوت (float32 -1..1) إلى WAV 16-bit في الذاكرة — لا يُكتب أي ملف على القرص."""
     pcm = np.clip(audio, -1.0, 1.0)
@@ -86,8 +109,10 @@ def _error(e: urllib.error.HTTPError) -> GroqError:
 def transcribe(audio: np.ndarray, *, api_key: str, model: str = DEFAULT_MODEL, language: str = "ar",
                prompt: str = "", rate: int = 16000, timeout: float = 120.0) -> tuple[list[Segment], float]:
     """(المقاطع، زمن المعالجة). يرفع الصوت إلى Groq ويعيد النص مقسّمًا بالتوقيتات."""
-    if not api_key:
-        raise GroqAuthError("مفيش مفتاح Groq محفوظ. أضفه من الإعدادات ← النموذج.")
+    api_key = normalize_key(api_key)
+    problem = key_problem(api_key)
+    if problem:
+        raise GroqAuthError(problem)
     wav = wav_bytes(audio, rate)
     size_mb = len(wav) / 2**20
     if size_mb > MAX_UPLOAD_MB:
@@ -120,6 +145,10 @@ def transcribe(audio: np.ndarray, *, api_key: str, model: str = DEFAULT_MODEL, l
 
 def check_key(api_key: str, timeout: float = 20.0) -> list[str]:
     """يتحقق من المفتاح ويعيد أسماء موديلات التفريغ المتاحة له."""
+    api_key = normalize_key(api_key)
+    problem = key_problem(api_key)
+    if problem:
+        raise GroqAuthError(problem)
     req = urllib.request.Request(f"{HOST}/models")
     req.add_header("Authorization", f"Bearer {api_key}")
     req.add_header("User-Agent", USER_AGENT)

@@ -13,6 +13,7 @@ from qool.cleanup import Segment
 from qool.config import Settings
 from qool.pipeline import Pipeline
 
+KEY = "gsk_" + "t" * 48
 AUDIO = np.sin(np.linspace(0, 400, 16000 * 3)).astype(np.float32) * 0.3
 
 
@@ -50,10 +51,10 @@ def test_request_carries_key_model_and_audio():
         return _resp({"segments": [{"text": "أهلاً", "start": 0.0, "end": 1.0}]})
 
     with patch("urllib.request.urlopen", fake_urlopen):
-        segments, took = groq_stt.transcribe(AUDIO, api_key="gsk_test", model="whisper-large-v3-turbo",
+        segments, took = groq_stt.transcribe(AUDIO, api_key=KEY, model="whisper-large-v3-turbo",
                                              prompt="سياق")
     assert seen["url"].endswith("/audio/transcriptions")
-    assert seen["auth"] == "Bearer gsk_test"
+    assert seen["auth"] == f"Bearer {KEY}"
     assert b'name="model"' in seen["body"] and b"whisper-large-v3-turbo" in seen["body"]
     assert b'name="language"' in seen["body"] and b"RIFF" in seen["body"]
     assert segments == [Segment("أهلاً", 0.0, 1.0)] and took >= 0
@@ -68,15 +69,15 @@ def test_requests_carry_a_user_agent():
         return _resp({"text": "ok", "data": []})
 
     with patch("urllib.request.urlopen", fake_urlopen):
-        groq_stt.transcribe(AUDIO, api_key="k")
-        groq_stt.check_key("k")
+        groq_stt.transcribe(AUDIO, api_key=KEY)
+        groq_stt.check_key(KEY)
     assert seen["agents"] == [groq_stt.USER_AGENT] * 2
     assert "urllib" not in groq_stt.USER_AGENT.lower()
 
 
 def test_plain_text_response_still_returns_one_segment():
     with patch("urllib.request.urlopen", lambda *a, **k: _resp({"text": "كلام"})):
-        segments, _ = groq_stt.transcribe(AUDIO, api_key="k")
+        segments, _ = groq_stt.transcribe(AUDIO, api_key=KEY)
     assert [s.text for s in segments] == ["كلام"]
 
 
@@ -90,7 +91,7 @@ def test_oversized_audio_is_rejected_locally():
     big = np.zeros(16000 * 60 * 30, dtype=np.float32)  # ~55 MB
     with patch("urllib.request.urlopen", lambda *a, **k: pytest.fail("ما كانش المفروض يرفع")):
         with pytest.raises(groq_stt.GroqError, match="حد الرفع"):
-            groq_stt.transcribe(big, api_key="k")
+            groq_stt.transcribe(big, api_key=KEY)
 
 
 @pytest.mark.parametrize("code,exc", [(401, groq_stt.GroqAuthError), (429, groq_stt.GroqQuotaError),
@@ -101,7 +102,7 @@ def test_http_errors_become_arabic_messages(code, exc):
 
     with patch("urllib.request.urlopen", boom):
         with pytest.raises(exc) as e:
-            groq_stt.transcribe(AUDIO, api_key="k")
+            groq_stt.transcribe(AUDIO, api_key=KEY)
     assert str(e.value) and not str(e.value).startswith("HTTP")
 
 
@@ -109,7 +110,7 @@ def _settings(**kw) -> Settings:
     kw.setdefault("stt_backend", "groq")
     kw.setdefault("groq_fallback_local", True)
     s = Settings(**kw)
-    s.set_groq_key("gsk_test")
+    s.set_groq_key(KEY)
     return s
 
 
@@ -160,3 +161,34 @@ def test_backend_local_ignores_groq_key():
 def test_groq_backend_without_key_stays_local():
     s = Settings(stt_backend="groq")
     assert Pipeline(s).uses_groq() is False
+
+
+# ---- التحقق من شكل المفتاح قبل أي طلب ----
+
+@pytest.mark.parametrize("bad,hint", [
+    ("بسم الله الرحمن الرحيم", "حروف عربية"),
+    ("", "مفيش مفتاح"),
+    ("gsk_ abc def", "مسافات"),
+    ("sk-not-a-groq-key-123456", "gsk_"),
+    ("gsk_short", "gsk_"),
+])
+def test_bad_keys_are_rejected_with_arabic_hint(bad, hint):
+    assert hint in groq_stt.key_problem(bad)
+
+
+def test_good_key_passes_validation():
+    assert groq_stt.key_problem("gsk_" + "a" * 48) == ""
+
+
+def test_normalize_strips_direction_marks_and_spaces():
+    pasted = "‏ gsk_" + "b" * 48 + "‎\n"
+    assert groq_stt.normalize_key(pasted) == "gsk_" + "b" * 48
+
+
+def test_dictated_arabic_never_reaches_the_network():
+    """الإملاء لو وقع في خانة المفتاح: لازم رسالة واضحة، مش انهيار UnicodeEncodeError."""
+    with patch("urllib.request.urlopen", lambda *a, **k: pytest.fail("ما كانش المفروض يتصل")):
+        with pytest.raises(groq_stt.GroqAuthError, match="حروف عربية"):
+            groq_stt.transcribe(AUDIO, api_key="بسم الله الرحمن الرحيم")
+        with pytest.raises(groq_stt.GroqAuthError, match="حروف عربية"):
+            groq_stt.check_key("بسم الله الرحمن الرحيم")

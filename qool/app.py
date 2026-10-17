@@ -609,12 +609,21 @@ class QoolApp(QObject):
             self.window.set_llm_status("المفتاح اتمسح.", False)
 
     def set_groq_key(self, key: str):
+        from . import groq_stt
+
+        key = groq_stt.normalize_key(key)
+        if not key:
+            self.settings.set_groq_key("")
+            self.settings.save()
+            self.window.set_groq_status("المفتاح اتمسح.", False)
+            return
+        problem = groq_stt.key_problem(key)
+        if problem:  # لا نكتب فوق مفتاح شغّال بحاجة غلط (إملاء وقع في الخانة مثلًا)
+            self.window.set_groq_status(problem, False)
+            return
         self.settings.set_groq_key(key)
         self.settings.save()
-        if key.strip():
-            self.check_groq_key()
-        else:
-            self.window.set_groq_status("المفتاح اتمسح.", False)
+        self.check_groq_key()
 
     def check_groq_key(self):
         """يتأكد إن مفتاح Groq شغال ويعرض موديلات التفريغ المتاحة — في خيط مستقل."""
@@ -631,6 +640,10 @@ class QoolApp(QObject):
                 models = groq_stt.check_key(key)
             except groq_stt.GroqError as e:
                 self.sig_groq.emit(str(e), False)
+                return
+            except Exception as e:  # أي عطل غير متوقع: نعرضه بدل ما تفضل «بيتأكد…» للأبد
+                log.exception("فشل فحص مفتاح Groq")
+                self.sig_groq.emit(f"تعذّر فحص المفتاح: {str(e)[:150]}", False)
                 return
             detail = ("المفتاح شغال. الموديلات المتاحة: " + "، ".join(models)) if models else "المفتاح شغال."
             self.sig_groq.emit(detail, True)
