@@ -538,8 +538,8 @@ class MainWindow(QMainWindow):
         # النموذج
         c = Card("النموذج والمعالجة", "الافتراضي: كل المعالجة على جهازك. التنزيل مرة واحدة فقط.")
         self.backend_combo = QComboBox()
-        for val, label in (("local", "على الجهاز (خصوصية كاملة، يحتاج كارت أو معالج قوي)"),
-                           ("groq", "أونلاين على Groq (أسرع للأجهزة الضعيفة — الصوت يُرسل للسيرفر)")):
+        for val, label in (("local", "على الجهاز — خصوصية كاملة، يحتاج كارت أو معالج قوي"),
+                           ("groq", "أونلاين — أسرع للأجهزة الضعيفة، والصوت يُرسل لسيرفر Groq")):
             self.backend_combo.addItem(label, val)
         self.backend_combo.setCurrentIndex(max(0, self.backend_combo.findData(s.stt_backend)))
         self.backend_combo.currentIndexChanged.connect(self._backend_changed)
@@ -569,13 +569,13 @@ class MainWindow(QMainWindow):
         self.groq_model_combo.currentIndexChanged.connect(
             lambda: self.app.update_setting("groq_model", self.groq_model_combo.currentData()))
         gv.addWidget(row("موديل Groq", self.groq_model_combo))
-        gv.addWidget(self._toggle("لو Groq فشل: كمّل على الجهاز", s.groq_fallback_local, "groq_fallback_local"))
+        gv.addWidget(self._toggle("كمّل على الجهاز لو الأونلاين فشل", s.groq_fallback_local, "groq_fallback_local"))
         self.groq_status = QLabel("")
         self.groq_status.setObjectName("small")
         self.groq_status.setWordWrap(True)
         gv.addWidget(self.groq_status)
-        ghint = QLabel("المفتاح مجاني من console.groq.com/keys — بيتحفظ مشفَّرًا بحساب ويندوز بتاعك. "
-                       "تنبيه: في الوضع الأونلاين الصوت بيتبعت لسيرفر Groq، فمتستخدمهوش مع كلام سري.")
+        ghint = QLabel("المفتاح مجاني من console.groq.com/keys، وبيتحفظ مشفَّرًا بحساب ويندوز بتاعك.\n"
+                       "تنبيه: في الوضع ده الصوت بيخرج من جهازك للسيرفر، فمتستخدمهوش مع كلام سري.")
         ghint.setObjectName("small")
         ghint.setWordWrap(True)
         gv.addWidget(ghint)
