@@ -12,6 +12,8 @@ from ..models import CATALOG, is_downloaded
 from . import theme
 from .widgets import Card, HotkeyEdit, RecordButton, ToggleSwitch, kbd, row, separator
 
+SETTINGS_SECTIONS = ("الإملاء", "التفريغ", "القارئ والجسر", "عام")
+
 GROQ_SIGNUP_URL = "https://console.groq.com/login"   # نفس الصفحة للتسجيل والدخول
 GROQ_KEYS_URL = "https://console.groq.com/keys"
 
@@ -372,14 +374,44 @@ class MainWindow(QMainWindow):
         return scroll
 
     def _settings_page(self, s):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        inner = QWidget()
-        v = QVBoxLayout(inner)
-        v.setContentsMargins(0, 0, 6, 0)
-        v.setSpacing(14)
-        scroll.setWidget(inner)
+        """الإعدادات مقسّمة لأقسام: كل قسم صفحة بمفرده بدل قائمة طويلة واحدة."""
+        page = QWidget()
+        page.setObjectName("clear")
+        pv = QVBoxLayout(page)
+        pv.setContentsMargins(0, 0, 0, 0)
+        pv.setSpacing(14)
+        subbar = QFrame()
+        subbar.setObjectName("navbar")
+        sl = QHBoxLayout(subbar)
+        sl.setContentsMargins(4, 4, 4, 4)
+        sl.setSpacing(2)
+        self.settings_nav = QButtonGroup(self)
+        self.settings_stack = QStackedWidget()
+        sections: dict[str, QVBoxLayout] = {}
+        for i, name in enumerate(SETTINGS_SECTIONS):
+            b = QPushButton(name)
+            b.setObjectName("nav")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            self.settings_nav.addButton(b, i)
+            sl.addWidget(b, 1)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            inner = QWidget()
+            lay = QVBoxLayout(inner)
+            lay.setContentsMargins(0, 0, 6, 0)
+            lay.setSpacing(14)
+            scroll.setWidget(inner)
+            self.settings_stack.addWidget(scroll)
+            sections[name] = lay
+        self.settings_nav.button(0).setChecked(True)
+        self.settings_nav.idClicked.connect(self.settings_stack.setCurrentIndex)
+        pv.addWidget(subbar)
+        pv.addWidget(self.settings_stack, 1)
+
+        def add(section: str, card) -> None:
+            sections[section].addWidget(card)
 
         # الاختصارات
         c = Card("الاختصارات", "انقر على الخانة ثم اضغط الاختصار الجديد مباشرة.")
@@ -396,7 +428,7 @@ class MainWindow(QMainWindow):
         self.hotkey_status.setObjectName("small")
         self.hotkey_status.setWordWrap(True)
         c.body.addWidget(self.hotkey_status)
-        v.addWidget(c)
+        add("الإملاء", c)
 
         # الميكروفون والتسجيل
         c = Card("الميكروفون")
@@ -417,7 +449,7 @@ class MainWindow(QMainWindow):
         max_min.setSuffix(" دقيقة")
         max_min.valueChanged.connect(lambda val: self.app.update_setting("max_recording_minutes", val))
         c.body.addWidget(row("أقصى مدة للتسجيل", max_min))
-        v.addWidget(c)
+        add("الإملاء", c)
 
         # جسر الميتينج
         c = Card("جسر الميتينج", "بيدمج صوت الميتينج مع مايكك ويبعتهم على «CABLE Input». "
@@ -434,7 +466,7 @@ class MainWindow(QMainWindow):
         self.bridge_mic_combo = QComboBox()
         self.bridge_mic_combo.currentIndexChanged.connect(self._bridge_mic_changed)
         c.body.addWidget(row("مايك الجسر", self.bridge_mic_combo))
-        v.addWidget(c)
+        add("القارئ والجسر", c)
 
         # القارئ
         c = Card("القارئ", "بيبعت النص المظلَّل لـ Gemini عشان يفهمه ويلخّصه ويقراه بصوت. "
@@ -529,17 +561,17 @@ class MainWindow(QMainWindow):
         self.speaker_combo.currentIndexChanged.connect(
             lambda: self.app.update_setting("tts_output_device", self.speaker_combo.currentData() or ""))
         c.body.addWidget(row("يطلع على", self.speaker_combo))
-        v.addWidget(c)
+        add("القارئ والجسر", c)
 
         # اللصق
         c = Card("اللصق", "لا يتم ضغط Enter أو إرسال أي رسالة أبدًا.")
         c.body.addWidget(self._toggle("لصق تلقائي في الخانة التي بدأت منها", s.auto_paste, "auto_paste"))
         c.body.addWidget(self._toggle("وضع المراجعة: انسخ فقط دون لصق", s.review_mode, "review_mode"))
         c.body.addWidget(self._toggle("إظهار المؤشر العائم أثناء التسجيل", s.show_overlay, "show_overlay"))
-        v.addWidget(c)
+        add("الإملاء", c)
 
         # النموذج
-        c = Card("النموذج والمعالجة", "الافتراضي: كل المعالجة على جهازك. التنزيل مرة واحدة فقط.")
+        c = Card("مكان التفريغ", "تقدر تفرّغ على جهازك أو أونلاين. الافتراضي: على جهازك.")
         self.backend_combo = QComboBox()
         for val, label in (("local", "على الجهاز — خصوصية كاملة، يحتاج كارت أو معالج قوي"),
                            ("groq", "أونلاين — أسرع للأجهزة الضعيفة، والصوت يُرسل لسيرفر Groq")):
@@ -594,7 +626,10 @@ class MainWindow(QMainWindow):
         gv.addWidget(ghint)
         self.groq_box.setVisible(s.stt_backend == "groq")
         c.body.addWidget(self.groq_box)
-        c.body.addWidget(separator())
+        add("التفريغ", c)
+
+        # النموذج المحلي
+        c = Card("النموذج المحلي", "النموذج اللي بيشتغل على جهازك. التنزيل مرة واحدة فقط.")
 
         self.model_combo = QComboBox()
         self.refresh_models()
@@ -668,7 +703,7 @@ class MainWindow(QMainWindow):
         cpl.addWidget(self.custom_path, 1)
         cpl.addWidget(browse)
         c.body.addWidget(row("نموذج مخصص", cp))
-        v.addWidget(c)
+        add("التفريغ", c)
 
         # اللغة
         c = Card("اللغة والتنظيف", "النص الخام متاح دائمًا لاسترجاع أي حذف.")
@@ -690,7 +725,7 @@ class MainWindow(QMainWindow):
         gap.setSpecialValueText("بلا فقرات")
         gap.valueChanged.connect(lambda val: self.app.update_setting("paragraph_gap_seconds", float(val)))
         c.body.addWidget(row("سطر جديد بعد سكتة", gap))
-        v.addWidget(c)
+        add("الإملاء", c)
 
         # عام
         c = Card("عام")
@@ -715,9 +750,10 @@ class MainWindow(QMainWindow):
         bottom.addStretch(1)
         bottom.addWidget(quit_btn)
         c.body.addLayout(bottom)
-        v.addWidget(c)
-        v.addStretch(1)
-        return scroll
+        add("عام", c)
+        for lay in sections.values():
+            lay.addStretch(1)
+        return page
 
     def _toggle(self, label, value, key):
         tg = ToggleSwitch(label, self.t)
