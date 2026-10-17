@@ -10,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from qool import groq_stt                      # noqa: E402
@@ -30,7 +32,36 @@ for left in range(int(seconds), 0, -1):
     print(f"   {left} ", end="\r", flush=True)
     time.sleep(1)
 audio = rec.stop()
-print(f"\n✅ اتسجّل {len(audio) / 16000:.1f} ثانية. بنفرّغ…\n")
+print(f"\n✅ اتسجّل {len(audio) / 16000:.1f} ثانية.")
+
+
+def _db(x: float) -> float:
+    return 20 * np.log10(max(x, 1e-9))
+
+
+def mic_report(a: np.ndarray) -> None:
+    """فحص سريع للمايك: المستوى، القص، ونسبة الكلام للدوشة. المشاكل دي بتخلي النص يطلع غلط."""
+    frame = 1600  # 0.1 ث
+    n = len(a) // frame * frame
+    rms = np.sqrt((a[:n].reshape(-1, frame) ** 2).mean(axis=1)) if n else np.array([0.0])
+    # مئويات بدل عتبة ثابتة: مع دوشة متواصلة مفيش لحظات «سكوت» فالعتبة بتدي أرقامًا وهمية
+    peak_db = _db(np.abs(a).max())
+    speech_db, noise_db = _db(np.percentile(rms, 90)), _db(np.percentile(rms, 10))
+    clipped = float((np.abs(a) > 0.99).mean() * 100)
+    print(f"\n🎚️ فحص المايك: أعلى مستوى {peak_db:.0f} dB | متوسط الكلام {speech_db:.0f} dB | "
+          f"الدوشة {noise_db:.0f} dB | فرق الكلام عن الدوشة {speech_db - noise_db:.0f} dB | قص {clipped:.1f}%")
+    if speech_db < -36:
+        print("   ⚠️ صوتك واطي قوي — قرّب المايك أو ارفع مستواه من إعدادات الصوت في ويندوز.")
+    if speech_db - noise_db < 20:
+        print("   ⚠️ الدوشة عالية مقارنة بصوتك — ده أكتر سبب بيخلي التفريغ يطلع كلام غلط.")
+    if clipped > 0.5:
+        print("   ⚠️ الصوت بيتقص (عالي أوي) — قلّل مستوى المايك شوية.")
+    if speech_db >= -36 and speech_db - noise_db >= 20 and clipped <= 0.5:
+        print("   ✅ المايك كويس.")
+
+
+mic_report(audio)
+print("\nبنفرّغ…\n")
 
 results: list[tuple[str, float, str]] = []
 
