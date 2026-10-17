@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import ctypes
 
+# ألوان هوية Claude: خلفية كريمية دافية، نص شبه أسود، ولون مميز طوبي (clay).
 DARK = dict(
-    bg="#101B20", surface="#17262D", surface2="#21343C", border="#30464F", text="#ECF4F4",
-    muted="#A1B7BD", accent="#167D8D", accent_hover="#2393A4", on_accent="#FFFFFF",
-    red="#FF4D5E", amber="#FFB020", green="#2BD576", danger="#FF6B6B",
+    bg="#141413", surface="#1F1E1D", surface2="#2B2A28", border="#3B3A37", text="#FAF9F5",
+    muted="#B0AEA5", accent="#D97757", accent_hover="#E28E73", on_accent="#1A1917",
+    red="#E07A68", amber="#D9A757", green="#9BB07C", danger="#E07A68",
 )
 LIGHT = dict(
-    bg="#F3F6F5", surface="#FFFFFF", surface2="#EDF3F2", border="#DCE6E3", text="#193630",
-    muted="#60766F", accent="#176B60", accent_hover="#11574E", on_accent="#FFFFFF",
-    red="#E5354A", amber="#D98E00", green="#12A150", danger="#D93025",
+    bg="#F0EEE6", surface="#FAF9F5", surface2="#E8E6DC", border="#DAD8CE", text="#141413",
+    muted="#5C5B54", accent="#B4502F", accent_hover="#9C4228", on_accent="#FAF9F5",
+    red="#B03A2B", amber="#9A6B1E", green="#5F7346", danger="#B03A2B",
 )
 
 FONT_FAMILY = '"Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI"'
