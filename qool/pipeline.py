@@ -55,8 +55,10 @@ class Pipeline:
 
         s = self.settings
         try:
+            # Groq ما عندهاش hotwords زي faster-whisper، فبنضم المصطلحات للسياق
+            prompt = " ".join(x for x in (s.initial_prompt, s.vocabulary) if x.strip())
             segments, took = groq_stt.transcribe(audio, api_key=s.groq_key(), model=s.groq_model,
-                                                 prompt=s.initial_prompt)
+                                                 prompt=prompt)
         except groq_stt.GroqError as e:
             if not s.groq_fallback_local:
                 raise
