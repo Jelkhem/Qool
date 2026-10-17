@@ -21,6 +21,8 @@ from .cleanup import Segment
 log = logging.getLogger(__name__)
 
 HOST = "https://api.groq.com/openai/v1"
+# Cloudflare أمام Groq بيرفض الطلب (403 code 1010) لو الـUser-Agent هو urllib الافتراضي
+USER_AGENT = "Qool/1.0 (+https://github.com/Jelkhem/Qool)"
 MODELS = ("whisper-large-v3-turbo", "whisper-large-v3")
 DEFAULT_MODEL = "whisper-large-v3-turbo"
 MAX_UPLOAD_MB = 24  # حد Groq للطبقة المجانية 25 MB؛ نترك هامشًا
@@ -97,6 +99,7 @@ def transcribe(audio: np.ndarray, *, api_key: str, model: str = DEFAULT_MODEL, l
     req = urllib.request.Request(f"{HOST}/audio/transcriptions", data=body, method="POST")
     req.add_header("Authorization", f"Bearer {api_key}")
     req.add_header("Content-Type", content_type)
+    req.add_header("User-Agent", USER_AGENT)
     t = time.perf_counter()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -119,6 +122,7 @@ def check_key(api_key: str, timeout: float = 20.0) -> list[str]:
     """يتحقق من المفتاح ويعيد أسماء موديلات التفريغ المتاحة له."""
     req = urllib.request.Request(f"{HOST}/models")
     req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("User-Agent", USER_AGENT)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace"))

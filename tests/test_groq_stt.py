@@ -59,6 +59,21 @@ def test_request_carries_key_model_and_audio():
     assert segments == [Segment("أهلاً", 0.0, 1.0)] and took >= 0
 
 
+def test_requests_carry_a_user_agent():
+    """بدون User-Agent صريح بيرد Cloudflare بـ403 (code 1010) حتى لو المفتاح سليم."""
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen.setdefault("agents", []).append(req.get_header("User-agent"))
+        return _resp({"text": "ok", "data": []})
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        groq_stt.transcribe(AUDIO, api_key="k")
+        groq_stt.check_key("k")
+    assert seen["agents"] == [groq_stt.USER_AGENT] * 2
+    assert "urllib" not in groq_stt.USER_AGENT.lower()
+
+
 def test_plain_text_response_still_returns_one_segment():
     with patch("urllib.request.urlopen", lambda *a, **k: _resp({"text": "كلام"})):
         segments, _ = groq_stt.transcribe(AUDIO, api_key="k")
