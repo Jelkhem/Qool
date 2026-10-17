@@ -25,6 +25,10 @@ class Settings:
     microphone: str = ""               # اسم الجهاز؛ فارغ = الافتراضي
     model: str = "large-v3-turbo"
     custom_model_path: str = ""
+    stt_backend: str = "local"         # local = على الجهاز | groq = أونلاين على سيرفر Groq
+    groq_api_key: str = ""             # مشفَّر بـ DPAPI؛ استخدم groq_key() / set_groq_key()
+    groq_model: str = "whisper-large-v3-turbo"
+    groq_fallback_local: bool = True   # لو Groq فشل: كمّل على الجهاز بدل ما نضيّع التسجيل
     device: str = "auto"               # auto | cuda | cpu
     gpu_compute_type: str = "int8_float16"
     cpu_compute_type: str = "int8"
@@ -104,6 +108,14 @@ class Settings:
     def set_api_key(self, key: str) -> None:
         from .secrets import protect
         self.llm_api_key = protect((key or "").strip())
+
+    def groq_key(self) -> str:
+        from .secrets import unprotect
+        return unprotect(self.groq_api_key)
+
+    def set_groq_key(self, key: str) -> None:
+        from .secrets import protect
+        self.groq_api_key = protect((key or "").strip())
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Settings":

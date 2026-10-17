@@ -43,6 +43,7 @@ class QoolApp(QObject):
     sig_reader = Signal(str, str)
     sig_reader_text = Signal(str)
     sig_llm_check = Signal(str, bool)
+    sig_groq = Signal(str, bool)
 
     def __init__(self, qapp: QApplication):
         super().__init__()
@@ -87,6 +88,7 @@ class QoolApp(QObject):
         self.sig_reader.connect(self._on_reader_state, Qt.QueuedConnection)
         self.sig_reader_text.connect(self.window.set_read_text, Qt.QueuedConnection)
         self.sig_llm_check.connect(self.window.set_llm_status, Qt.QueuedConnection)
+        self.sig_groq.connect(self.window.set_groq_status, Qt.QueuedConnection)
 
         # مؤقت الواجهة يعمل فقط أثناء التسجيل (لا استهلاك CPU في الخمول)
         self.level_timer = QTimer(self, interval=50, timeout=self._tick)
@@ -134,6 +136,9 @@ class QoolApp(QObject):
 
     def _startup_model(self):
         s = self.settings
+        if self.pipeline.uses_groq():  # التفريغ أونلاين: لا نحمّل نموذجًا محليًا ولا نطلب تنزيله
+            self.window.set_model_status(f"التفريغ أونلاين على Groq ({s.groq_model}).")
+            return
         if not s.custom_model_path and not is_downloaded(s.model):
             info = CATALOG.get(s.model) or CATALOG["large-v3-turbo"]
             self.window.set_model_status(f"النموذج {info.key} غير منزَّل (~{info.size_mb} MB).")
@@ -602,6 +607,47 @@ class QoolApp(QObject):
             self.check_api_key()
         else:
             self.window.set_llm_status("المفتاح اتمسح.", False)
+
+    def set_groq_key(self, key: str):
+        self.settings.set_groq_key(key)
+        self.settings.save()
+        if key.strip():
+            self.check_groq_key()
+        else:
+            self.window.set_groq_status("المفتاح اتمسح.", False)
+
+    def check_groq_key(self):
+        """يتأكد إن مفتاح Groq شغال ويعرض موديلات التفريغ المتاحة — في خيط مستقل."""
+        from . import groq_stt
+
+        key = self.settings.groq_key()
+        if not key:
+            self.window.set_groq_status("محطّش مفتاح لسه.", False)
+            return
+        self.window.set_groq_status("بيتأكد من المفتاح...", True)
+
+        def job():
+            try:
+                models = groq_stt.check_key(key)
+            except groq_stt.GroqError as e:
+                self.sig_groq.emit(str(e), False)
+                return
+            detail = ("المفتاح شغال. الموديلات المتاحة: " + "، ".join(models)) if models else "المفتاح شغال."
+            self.sig_groq.emit(detail, True)
+        self.worker.submit(self._guard, job)
+
+    def set_stt_backend(self, backend: str):
+        self.settings.stt_backend = backend
+        self.settings.save()
+        if backend == "groq":
+            self.window.set_model_status(f"التفريغ أونلاين على Groq ({self.settings.groq_model}).")
+            self.unload_model_now()  # مفيش داعي نشغل ~1 GB رام لنموذج مش هيتستخدم
+            if not self.settings.groq_key():
+                self.window.set_groq_status("محطّش مفتاح لسه — من غيره هيفضل التفريغ على الجهاز.", False)
+        else:
+            self.window.set_model_status("التفريغ على الجهاز.")
+            if self.settings.preload_on_start:
+                self.load_model_now()
 
     def check_api_key(self):
         """يتأكد إن المفتاح شغال ويختار أفضل موديل متاح — في خيط مستقل."""

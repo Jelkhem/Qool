@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDoubleSpinBox, QFileDia
                                QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
 from .. import APP_TITLE, __version__
+from ..groq_stt import MODELS as GROQ_MODELS
 from ..models import CATALOG, is_downloaded
 from . import theme
 from .widgets import Card, HotkeyEdit, RecordButton, ToggleSwitch, kbd, row, separator
@@ -535,7 +536,53 @@ class MainWindow(QMainWindow):
         v.addWidget(c)
 
         # النموذج
-        c = Card("النموذج والمعالجة", "كل المعالجة على جهازك. التنزيل مرة واحدة فقط.")
+        c = Card("النموذج والمعالجة", "الافتراضي: كل المعالجة على جهازك. التنزيل مرة واحدة فقط.")
+        self.backend_combo = QComboBox()
+        for val, label in (("local", "على الجهاز (خصوصية كاملة، يحتاج كارت أو معالج قوي)"),
+                           ("groq", "أونلاين على Groq (أسرع للأجهزة الضعيفة — الصوت يُرسل للسيرفر)")):
+            self.backend_combo.addItem(label, val)
+        self.backend_combo.setCurrentIndex(max(0, self.backend_combo.findData(s.stt_backend)))
+        self.backend_combo.currentIndexChanged.connect(self._backend_changed)
+        c.body.addWidget(row("مكان التفريغ", self.backend_combo))
+
+        self.groq_box = QWidget()
+        self.groq_box.setObjectName("clear")
+        gv = QVBoxLayout(self.groq_box)
+        gv.setContentsMargins(0, 0, 0, 0)
+        gkeyw = QWidget()
+        gkeyw.setObjectName("clear")
+        gkl = QHBoxLayout(gkeyw)
+        gkl.setContentsMargins(0, 0, 0, 0)
+        self.groq_key_edit = QLineEdit()
+        self.groq_key_edit.setEchoMode(QLineEdit.Password)
+        self.groq_key_edit.setPlaceholderText("الصق مفتاح Groq هنا (يبدأ بـ gsk_)")
+        self.groq_key_edit.setText(s.groq_key())
+        save_gkey = QPushButton("حفظ واختبار")
+        save_gkey.clicked.connect(lambda: self.app.set_groq_key(self.groq_key_edit.text()))
+        gkl.addWidget(self.groq_key_edit, 1)
+        gkl.addWidget(save_gkey)
+        gv.addWidget(row("مفتاح Groq", gkeyw))
+        self.groq_model_combo = QComboBox()
+        for val in GROQ_MODELS:
+            self.groq_model_combo.addItem(val, val)
+        self.groq_model_combo.setCurrentIndex(max(0, self.groq_model_combo.findData(s.groq_model)))
+        self.groq_model_combo.currentIndexChanged.connect(
+            lambda: self.app.update_setting("groq_model", self.groq_model_combo.currentData()))
+        gv.addWidget(row("موديل Groq", self.groq_model_combo))
+        gv.addWidget(self._toggle("لو Groq فشل: كمّل على الجهاز", s.groq_fallback_local, "groq_fallback_local"))
+        self.groq_status = QLabel("")
+        self.groq_status.setObjectName("small")
+        self.groq_status.setWordWrap(True)
+        gv.addWidget(self.groq_status)
+        ghint = QLabel("المفتاح مجاني من console.groq.com/keys — بيتحفظ مشفَّرًا بحساب ويندوز بتاعك. "
+                       "تنبيه: في الوضع الأونلاين الصوت بيتبعت لسيرفر Groq، فمتستخدمهوش مع كلام سري.")
+        ghint.setObjectName("small")
+        ghint.setWordWrap(True)
+        gv.addWidget(ghint)
+        self.groq_box.setVisible(s.stt_backend == "groq")
+        c.body.addWidget(self.groq_box)
+        c.body.addWidget(separator())
+
         self.model_combo = QComboBox()
         self.refresh_models()
         self.model_combo.currentIndexChanged.connect(self._model_changed)
@@ -717,6 +764,15 @@ class MainWindow(QMainWindow):
 
     def _model_changed(self):
         self.app.update_setting("model", self.model_combo.currentData(), reload=True)
+
+    def _backend_changed(self):
+        backend = self.backend_combo.currentData()
+        self.groq_box.setVisible(backend == "groq")
+        self.app.set_stt_backend(backend)
+
+    def set_groq_status(self, text: str, ok: bool):
+        self.groq_status.setText(text)
+        self.groq_status.setStyleSheet(f"color:{self.t['green'] if ok else self.t['danger']};")
 
     def _download_clicked(self):
         key = self.model_combo.currentData()

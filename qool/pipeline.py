@@ -34,6 +34,7 @@ class Pipeline:
         self.settings = settings
         self.transcriber = transcriber or Transcriber()
         self.on_load = on_load  # callable(LoadInfo) لإبلاغ الواجهة بالجهاز/fallback
+        self._groq_notice = ""  # سبب الرجوع من Groq للجهاز، يُعرض مع نتيجة التفريغ
 
     def load(self, force_cpu: bool = False) -> LoadInfo:
         s = self.settings
@@ -45,8 +46,46 @@ class Pipeline:
             self.on_load(info)
         return info
 
+    def uses_groq(self) -> bool:
+        return self.settings.stt_backend == "groq" and bool(self.settings.groq_key())
+
+    def _groq_audio(self, audio, cancel_check) -> ProcessOutput | None:
+        """يفرّغ على سيرفر Groq. يعيد None لو فشل والرجوع للجهاز مسموح."""
+        from . import groq_stt
+
+        s = self.settings
+        try:
+            segments, took = groq_stt.transcribe(audio, api_key=s.groq_key(), model=s.groq_model,
+                                                 prompt=s.initial_prompt)
+        except groq_stt.GroqError as e:
+            if not s.groq_fallback_local:
+                raise
+            log.warning("فشل التفريغ على Groq، الرجوع للجهاز: %s", e)
+            self._groq_notice = f"تعذّر التفريغ أونلاين ({e}) — تم التفريغ على الجهاز."
+            return None
+        if cancel_check():
+            from .transcriber import TranscriptionCancelled
+            raise TranscriptionCancelled()
+        raw = join_segments(segments, s.paragraph_gap_seconds)
+        if is_meaningless(raw):
+            raise NoSpeech("لم يُكتشف كلام واضح في التسجيل؛ لم يُكتب أي نص.")
+        cleaned = clean_text(raw) if s.cleanup_enabled else raw.strip()
+        if is_meaningless(cleaned):
+            raise NoSpeech("لم يُكتشف كلام مفهوم في التسجيل؛ لم يُكتب أي نص.")
+        seconds = len(audio) / 16000
+        meta = dict(audio_seconds=round(seconds, 2), speech_seconds=round(seconds, 2),
+                    process_seconds=round(took, 2), device="groq", model=s.groq_model,
+                    fallback="", dropped_segments=0)
+        log.info("تفريغ أونلاين: صوت=%.1fث معالجة=%.2fث موديل=%s", seconds, took, s.groq_model)
+        return ProcessOutput(raw, cleaned, meta)
+
     def process_audio(self, audio, cancel_check=lambda: False) -> ProcessOutput:
         s = self.settings
+        self._groq_notice = ""
+        if self.uses_groq():
+            out = self._groq_audio(audio, cancel_check)
+            if out is not None:
+                return out
         info = self.load()
         was_loaded_now = info.load_seconds if self.transcriber.last_used == 0 else 0.0
         res = self.transcriber.transcribe(
@@ -63,7 +102,8 @@ class Pipeline:
         meta = dict(audio_seconds=round(res.duration, 2), speech_seconds=round(res.speech_duration, 2),
                     process_seconds=round(res.process_seconds, 2), device=res.device,
                     model=self.transcriber.info.model_name if self.transcriber.info else "",
-                    fallback=res.fallback_reason, dropped_segments=res.dropped_segments)
+                    fallback=self._groq_notice or res.fallback_reason,
+                    dropped_segments=res.dropped_segments)
         log.info("تفريغ: صوت=%.1fث كلام=%.1fث معالجة=%.2fث جهاز=%s", res.duration, res.speech_duration,
                  res.process_seconds, res.device)
         return ProcessOutput(raw, cleaned, meta)
