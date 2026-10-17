@@ -13,7 +13,12 @@ log = logging.getLogger(__name__)
 
 DEFAULT_HOTKEY = "Ctrl+Alt+Space"
 FALLBACK_HOTKEY = "Ctrl+Alt+Q"
-DEFAULT_PROMPT = "ده كلام باللهجة المصرية، وممكن يكون فيه كلمات إنجليزي زي Claude وExcel وAPI."
+# Whisper بيكمّل على أسلوب السياق نفسه، فالسياق مكتوب بالمصري عمدًا (مش وصفًا للمصري بالفصحى)،
+# عشان النص الناتج يطلع «خلينا نشوف» مش «دعونا نرى».
+DEFAULT_PROMPT = ("إزيك عامل إيه؟ خلينا نشوف الدنيا ماشية إزاي دلوقتي. أنا عايز أعرف الكلام ده "
+                  "هيتكتب إزاي بالظبط، مش عايزه فصحى خالص. ممكن يكون فيه كلمات إنجليزي زي "
+                  "Claude وExcel وAPI.")
+OLD_DEFAULT_PROMPT = "ده كلام باللهجة المصرية، وممكن يكون فيه كلمات إنجليزي زي Claude وExcel وAPI."
 
 
 @dataclass
@@ -132,6 +137,8 @@ class Settings:
                         setattr(s, k, float(v))
         except Exception:
             log.exception("تعذر قراءة الإعدادات؛ سيتم استخدام الافتراضي")
+        if s.initial_prompt.strip() == OLD_DEFAULT_PROMPT:  # سياق قديم لم يغيّره المستخدم
+            s.initial_prompt = DEFAULT_PROMPT
         return s
 
     def save(self, path: Path | None = None) -> None:

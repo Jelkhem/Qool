@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from qool import groq_stt                      # noqa: E402
 from qool.audio import Recorder                # noqa: E402
 from qool.cleanup import clean_text, join_segments  # noqa: E402
-from qool.config import Settings               # noqa: E402
+from qool.config import DEFAULT_PROMPT, Settings  # noqa: E402
 from qool.pipeline import resolve_model        # noqa: E402
 from qool.transcriber import Transcriber       # noqa: E402
 
@@ -34,13 +34,19 @@ print(f"\n✅ اتسجّل {len(audio) / 16000:.1f} ثانية. بنفرّغ…\
 
 results: list[tuple[str, float, str]] = []
 
+PROMPTS = {"سياقك الحالي": prompt,
+           "سياق مصري أقوى": " ".join(x for x in (DEFAULT_PROMPT, s.vocabulary) if x.strip()),
+           "بدون سياق": ""}
+
 if s.groq_key():
     for model in groq_stt.MODELS:
-        try:
-            segs, took = groq_stt.transcribe(audio, api_key=s.groq_key(), model=model, prompt=prompt)
-            results.append((f"أونلاين — {model}", took, clean_text(join_segments(segs, s.paragraph_gap_seconds))))
-        except groq_stt.GroqError as e:
-            results.append((f"أونلاين — {model}", 0.0, f"فشل: {e}"))
+        for pname, ptext in PROMPTS.items():
+            try:
+                segs, took = groq_stt.transcribe(audio, api_key=s.groq_key(), model=model, prompt=ptext)
+                results.append((f"أونلاين — {model} | {pname}", took,
+                                clean_text(join_segments(segs, s.paragraph_gap_seconds))))
+            except groq_stt.GroqError as e:
+                results.append((f"أونلاين — {model} | {pname}", 0.0, f"فشل: {e}"))
 else:
     print("(مفيش مفتاح Groq محفوظ — هنجرب المحلي بس)")
 
