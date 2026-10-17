@@ -6,6 +6,12 @@
 - لا اشتراكات، ولا API مدفوع، ولا telemetry، ولا إرسال للصوت أو النص لأي خدمة.
 - الإنترنت مطلوب فقط أول مرة لتنزيل المكتبات والنموذج.
 
+## شرح بالفيديو (دقيقة واحدة)
+
+https://github.com/Jelkhem/Qool/raw/main/docs/qool-howto.mp4
+
+> لو الفيديو مش ظاهر، نزّله من [docs/qool-howto.mp4](docs/qool-howto.mp4).
+
 ---
 
 ## 1) التثبيت
