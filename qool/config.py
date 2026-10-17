@@ -11,8 +11,9 @@ from .paths import settings_file
 
 log = logging.getLogger(__name__)
 
-DEFAULT_HOTKEY = "Ctrl+Alt+Space"
-FALLBACK_HOTKEY = "Ctrl+Alt+Q"
+# Ctrl+Alt+Space محجوز من برامج دردشة كتير، فالافتراضي بقى Q والاحتياطي Space
+DEFAULT_HOTKEY = "Ctrl+Alt+Q"
+FALLBACK_HOTKEY = "Ctrl+Alt+Space"
 # Whisper بيكمّل على أسلوب السياق نفسه، فالسياق مكتوب بالمصري عمدًا (مش وصفًا للمصري بالفصحى)،
 # عشان النص الناتج يطلع «خلينا نشوف» مش «دعونا نرى».
 DEFAULT_PROMPT = ("إزيك عامل إيه؟ خلينا نشوف الدنيا ماشية إزاي دلوقتي. أنا عايز أعرف الكلام ده "
