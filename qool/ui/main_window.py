@@ -12,6 +12,9 @@ from ..models import CATALOG, is_downloaded
 from . import theme
 from .widgets import Card, HotkeyEdit, RecordButton, ToggleSwitch, kbd, row, separator
 
+GROQ_SIGNUP_URL = "https://console.groq.com/login"   # نفس الصفحة للتسجيل والدخول
+GROQ_KEYS_URL = "https://console.groq.com/keys"
+
 TTS_ENGINES = (
     ("gemini", "Gemini — بينطق العامية المصرية صح (مُوصى به)"),
     ("edge", "Edge — أسرع وبدون مفتاح، بس بينطق العامية بالفصحى"),
@@ -562,6 +565,15 @@ class MainWindow(QMainWindow):
         gkl.addWidget(self.groq_key_edit, 1)
         gkl.addWidget(save_gkey)
         gv.addWidget(row("مفتاح Groq", gkeyw))
+        gb = QHBoxLayout()
+        open_signup = QPushButton("إنشاء حساب Groq")
+        open_signup.clicked.connect(lambda: self._open_url(GROQ_SIGNUP_URL))
+        open_keys = QPushButton("صفحة المفاتيح")
+        open_keys.clicked.connect(lambda: self._open_url(GROQ_KEYS_URL))
+        gb.addWidget(open_signup)
+        gb.addWidget(open_keys)
+        gb.addStretch(1)
+        gv.addLayout(gb)
         self.groq_model_combo = QComboBox()
         for val in GROQ_MODELS:
             self.groq_model_combo.addItem(val, val)
@@ -574,7 +586,8 @@ class MainWindow(QMainWindow):
         self.groq_status.setObjectName("small")
         self.groq_status.setWordWrap(True)
         gv.addWidget(self.groq_status)
-        ghint = QLabel("المفتاح مجاني من console.groq.com/keys، وبيتحفظ مشفَّرًا بحساب ويندوز بتاعك.\n"
+        ghint = QLabel("اعمل حساب مجاني، وبعدين من صفحة المفاتيح دوس Create API Key وانسخ المفتاح والصقه فوق.\n"
+                       "المفتاح بيتحفظ مشفَّرًا بحساب ويندوز بتاعك.\n"
                        "تنبيه: في الوضع ده الصوت بيخرج من جهازك للسيرفر، فمتستخدمهوش مع كلام سري.")
         ghint.setObjectName("small")
         ghint.setWordWrap(True)
@@ -764,6 +777,11 @@ class MainWindow(QMainWindow):
 
     def _model_changed(self):
         self.app.update_setting("model", self.model_combo.currentData(), reload=True)
+
+    def _open_url(self, url: str):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(url))
 
     def _backend_changed(self):
         backend = self.backend_combo.currentData()
