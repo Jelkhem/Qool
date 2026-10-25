@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import threading
+import urllib.error
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -38,6 +41,63 @@ CATALOG: dict[str, ModelInfo] = {
 REQUIRED_FILES = ("model.bin", "config.json", "tokenizer.json")
 _COMPLETE_MARK = ".complete"
 
+DEFAULT_ENDPOINT = "https://huggingface.co"
+# مرايا معروفة لنفس الملفات؛ تُستخدم لو الأصل محجوب من شبكة الشركة
+MIRRORS = ("https://hf-mirror.com",)
+
+
+def endpoint() -> str:
+    """مصدر النماذج: متغيّر بيئة أو الإعداد، وإلا Hugging Face."""
+    return (os.environ.get("QOOL_MODEL_ENDPOINT") or DEFAULT_ENDPOINT).rstrip("/")
+
+
+def blocked_message(e: Exception, host: str = "") -> str:
+    """رسالة عربية مفهومة بدل نص urllib الإنجليزي."""
+    host = host or endpoint()
+    detail = str(e)[:90]
+    return (f"تعذّر الوصول لمصدر النماذج {host} — غالبًا محجوب من شبكة الشركة.\n"
+            "الحلول: استورد النموذج من مجلد أو فلاشة (زر «استيراد نموذج…»)، "
+            "أو اطلب من IT السماح بـ huggingface.co و cdn-lfs.hf.co، "
+            "أو جرّب مرآة بديلة.\n"
+            f"تفاصيل فنية: {detail}")
+
+
+def import_model(source: str | Path, key: str | None = None) -> str:
+    """ينسخ نموذجًا جاهزًا من مجلد أو ملف ZIP (فلاشة مثلًا) — بدون إنترنت.
+
+    يرجّع اسم النموذج اللي اتسطّب.
+    """
+    src = Path(source)
+    if not src.exists():
+        raise FileNotFoundError("المسار مش موجود.")
+    if src.is_file():
+        if src.suffix.lower() != ".zip":
+            raise ValueError("الملف لازم يكون مجلد نموذج أو ملف ZIP.")
+        tmp = models_dir() / f".import-{src.stem}"
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        with zipfile.ZipFile(src) as z:
+            z.extractall(tmp)
+        inner = [d for d in tmp.rglob("*") if d.is_dir() and is_valid_model_dir(d)]
+        folder = inner[0] if inner else tmp
+    else:
+        folder = src
+        tmp = None
+    if not is_valid_model_dir(folder):
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+        raise ValueError("المجلد ده مش نموذج صالح (لازم يحتوي model.bin و config.json و tokenizer.json).")
+    name = key or folder.name
+    dest = model_path(name)
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(folder, dest)
+    (dest / _COMPLETE_MARK).write_text("ok", encoding="utf-8")
+    if tmp:
+        shutil.rmtree(tmp, ignore_errors=True)
+    log.info("تم استيراد النموذج %s من %s", name, src)
+    return name
+
 
 def model_path(key: str) -> Path:
     return models_dir() / key
@@ -58,7 +118,7 @@ class DownloadCancelled(Exception):
 
 
 def _list_files(repo: str) -> list[tuple[str, int]]:
-    url = f"https://huggingface.co/api/models/{repo}/tree/main"
+    url = f"{endpoint()}/api/models/{repo}/tree/main"
     with urllib.request.urlopen(url, timeout=30) as r:
         items = json.load(r)
     return [(i["path"], int(i.get("size", 0))) for i in items
@@ -83,7 +143,7 @@ def download(key: str, progress: Callable[[int, int], None] | None = None,
             continue
         part = dest / (name + ".part")
         have = part.stat().st_size if part.exists() else 0
-        req = urllib.request.Request(f"https://huggingface.co/{info.repo}/resolve/main/{name}")
+        req = urllib.request.Request(f"{endpoint()}/{info.repo}/resolve/main/{name}")
         if have:
             req.add_header("Range", f"bytes={have}-")
         with urllib.request.urlopen(req, timeout=60) as r:

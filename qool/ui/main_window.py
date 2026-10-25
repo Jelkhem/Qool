@@ -642,7 +642,11 @@ class MainWindow(QMainWindow):
         self.delete_btn = QPushButton("حذف النموذج")
         self.delete_btn.setObjectName("danger")
         self.delete_btn.clicked.connect(self._delete_clicked)
+        self.import_btn = QPushButton("استيراد نموذج…")
+        self.import_btn.setToolTip("نموذج جاهز من مجلد أو ZIP (فلاشة) — من غير إنترنت")
+        self.import_btn.clicked.connect(self._import_clicked)
         mb.addWidget(self.download_btn)
+        mb.addWidget(self.import_btn)
         mb.addWidget(self.delete_btn)
         mb.addStretch(1)
         c.body.addLayout(mb)
@@ -650,6 +654,10 @@ class MainWindow(QMainWindow):
         self.download_bar.setObjectName("download")
         self.download_bar.setVisible(False)
         c.body.addWidget(self.download_bar)
+        self.download_status = QLabel("")
+        self.download_status.setObjectName("small")
+        self.download_status.setWordWrap(True)
+        c.body.addWidget(self.download_status)
         c.body.addWidget(separator())
 
         self.device_combo = QComboBox()
@@ -827,6 +835,15 @@ class MainWindow(QMainWindow):
     def set_groq_status(self, text: str, ok: bool):
         self.groq_status.setText(text)
         self.groq_status.setStyleSheet(f"color:{self.t['green'] if ok else self.t['danger']};")
+
+    def _import_clicked(self):
+        path, _ = QFileDialog.getOpenFileName(self, "اختر ملف ZIP للنموذج", "", "ZIP (*.zip)")
+        if not path:
+            path = QFileDialog.getExistingDirectory(self, "أو اختر مجلد النموذج")
+        if path:
+            self.download_status.setText("جارٍ الاستيراد…")
+            self.download_status.setStyleSheet(f"color:{self.t['muted']};")
+            self.app.import_model_from(path)
 
     def _download_clicked(self):
         key = self.model_combo.currentData()
@@ -1050,9 +1067,14 @@ class MainWindow(QMainWindow):
 
     def download_finished(self, ok: bool, message: str):
         self.download_btn.setText("تنزيل")
-        self.download_bar.setVisible(not ok)
+        self.download_bar.setVisible(False)
         self.refresh_models()
         self.set_notice(message)
+        # نفس الرسالة جنب الزرار: المستخدم بيكون واقف هنا مش في صفحة الإملاء
+        self.download_status.setText(message)
+        self.download_status.setStyleSheet(f"color:{self.t['green'] if ok else self.t['danger']};")
+        if not ok:
+            self.app.notify(message)
 
     def closeEvent(self, e):
         # الإغلاق يخفي النافذة؛ الخروج من شريط النظام أو زر «خروج من التطبيق»

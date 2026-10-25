@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 import time
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -20,7 +21,8 @@ from .audio import Recorder, list_input_devices
 from .config import DEFAULT_HOTKEY, FALLBACK_HOTKEY, Settings
 from .controller import Controller, State
 from .hotkey import HotkeyError, HotkeyManager, normalize_hotkey
-from .models import CATALOG, DownloadCancelled, delete_model, download, is_downloaded
+from .models import (CATALOG, DownloadCancelled, blocked_message as models_blocked_message,
+                     delete_model, download, import_model, is_downloaded)
 from .paster import Outcome, Paster
 from .pipeline import ModelMissing, Pipeline
 from .reader import Reader
@@ -465,11 +467,34 @@ class QoolApp(QObject):
                 self.sig_download_done.emit(True, f"اكتمل تنزيل النموذج {key}.")
             except DownloadCancelled:
                 self.sig_download_done.emit(False, "تم إيقاف التنزيل؛ يمكن استكماله لاحقًا.")
+            except (urllib.error.URLError, OSError, TimeoutError) as e:
+                log.exception("فشل التنزيل (شبكة)")
+                self.sig_download_done.emit(False, models_blocked_message(e))
             except Exception as e:
                 log.exception("فشل التنزيل")
                 self.sig_download_done.emit(False, f"فشل التنزيل: {e}")
 
         threading.Thread(target=run, daemon=True, name="download").start()
+
+    def notify(self, message: str, warning: bool = True):
+        """إشعار في شريط النظام: يظهر حتى لو المستخدم في صفحة تانية."""
+        self.tray.showMessage(APP_TITLE, message[:250],
+                              QSystemTrayIcon.Warning if warning else QSystemTrayIcon.Information, 8000)
+
+    def import_model_from(self, path: str):
+        """استيراد نموذج جاهز من مجلد أو ZIP (للأجهزة اللي التنزيل محجوب عليها)."""
+        def job():
+            try:
+                name = import_model(path)
+                if name in CATALOG:          # نموذج معروف: نختاره مباشرة
+                    self.settings.model = name
+                    self.settings.custom_model_path = ""
+                    self.settings.save()
+                self.sig_download_done.emit(True, f"تم استيراد النموذج {name} بنجاح.")
+            except Exception as e:
+                log.exception("فشل استيراد النموذج")
+                self.sig_download_done.emit(False, f"فشل الاستيراد: {e}")
+        threading.Thread(target=job, daemon=True, name="import-model").start()
 
     def cancel_download(self):
         self._download_cancel.set()
