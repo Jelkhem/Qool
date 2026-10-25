@@ -147,8 +147,7 @@ https://github.com/Jelkhem/Qool/raw/main/docs/qool-howto.mp4
 لمعرفة المحجوب بالضبط على جهاز الشركة:
 
 ```
-.venv\Scripts\python.exe scripts
-etwork_check.py
+.venv\Scripts\python.exe scripts\network_check.py
 ```
 
 بيفرّق بين **الحجب** و**اعتراض الشهادات**، وبيطبع العناوين اللي ممكن تطلبها من IT
