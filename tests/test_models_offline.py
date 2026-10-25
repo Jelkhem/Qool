@@ -99,3 +99,55 @@ def test_transcription_needs_no_network(tmp_path, monkeypatch):
     monkeypatch.setattr(socket, "create_connection", no_network)
     assert M.is_downloaded("small")
     assert M.is_valid_model_dir(M.model_path("small"))
+
+
+def test_blocked_primary_falls_back_to_mirror_by_itself(tmp_path, monkeypatch):
+    """لازم يجرّب المرايا لوحده من غير ما المستخدم يضبط متغيّر بيئة."""
+    monkeypatch.setenv("QOOL_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("QOOL_MODEL_ENDPOINT", raising=False)
+    tried = []
+
+    def fake_urlopen(req, timeout=None):
+        url = req if isinstance(req, str) else req.full_url
+        tried.append(url)
+        if M.DEFAULT_ENDPOINT in url:
+            raise urllib.error.URLError(ConnectionResetError(10054, "blocked"))
+
+        class R:
+            status = 200
+            def __init__(self):
+                self._n = 0
+            def read(self, *a):
+                if "/api/" in url:
+                    return json.dumps([{"type": "file", "path": n, "size": 4}
+                                       for n in M.REQUIRED_FILES]).encode()
+                self._n += 1
+                return b"abcd" if self._n == 1 else b""
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+        return R()
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        M.download("small")
+    assert any(M.DEFAULT_ENDPOINT in u for u in tried), "لازم يبدأ بالمصدر الأساسي"
+    assert any(M.MIRRORS[0] in u for u in tried), "لازم يجرّب المرآة لوحده"
+    assert M.is_downloaded("small")
+
+
+def test_explicit_endpoint_disables_the_mirrors(monkeypatch):
+    monkeypatch.setenv("QOOL_MODEL_ENDPOINT", "https://models.jci.local")
+    assert M.sources() == ["https://models.jci.local"]
+
+
+def test_all_sources_blocked_raises_the_network_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("QOOL_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("QOOL_MODEL_ENDPOINT", raising=False)
+
+    def always_blocked(req, timeout=None):
+        raise urllib.error.URLError(ConnectionResetError(10054, "blocked"))
+
+    with patch("urllib.request.urlopen", always_blocked):
+        with pytest.raises(urllib.error.URLError):
+            M.download("small")

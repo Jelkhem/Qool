@@ -42,7 +42,10 @@ REQUIRED_FILES = ("model.bin", "config.json", "tokenizer.json")
 _COMPLETE_MARK = ".complete"
 
 DEFAULT_ENDPOINT = "https://huggingface.co"
-# مرايا معروفة لنفس الملفات؛ تُستخدم لو الأصل محجوب من شبكة الشركة
+# مرايا تُجرَّب تلقائيًا لو الأصل محجوب.
+# ملاحظة مقاسة (٢٥ أكتوبر ٢٠٢٦): hf-mirror.com بيرد 308 ويحوّل لـ huggingface.co نفسه،
+# فهو مش حل للحجب — سايبينه لأنه بيفيد لو الحجب على مستوى DNS فقط، والحل الأكيد
+# للأجهزة المحجوبة هو استيراد النموذج من فلاشة.
 MIRRORS = ("https://hf-mirror.com",)
 
 
@@ -56,9 +59,9 @@ def blocked_message(e: Exception, host: str = "") -> str:
     host = host or endpoint()
     detail = str(e)[:90]
     return (f"تعذّر الوصول لمصدر النماذج {host} — غالبًا محجوب من شبكة الشركة.\n"
-            "الحلول: استورد النموذج من مجلد أو فلاشة (زر «استيراد نموذج…»)، "
-            "أو اطلب من IT السماح بـ huggingface.co و cdn-lfs.hf.co، "
-            "أو جرّب مرآة بديلة.\n"
+            "جرّبنا المرايا البديلة كمان وما نفعتش.\n"
+            "الحل: استورد النموذج من مجلد أو فلاشة (زر «استيراد نموذج…»)، "
+            "أو اطلب من IT السماح بـ huggingface.co و cdn-lfs.hf.co.\n"
             f"تفاصيل فنية: {detail}")
 
 
@@ -117,8 +120,15 @@ class DownloadCancelled(Exception):
     pass
 
 
-def _list_files(repo: str) -> list[tuple[str, int]]:
-    url = f"{endpoint()}/api/models/{repo}/tree/main"
+def sources(allow_mirrors: bool = True) -> list[str]:
+    """مصادر التنزيل بالترتيب. لو المستخدم حدّد مصدرًا صراحةً فهو الوحيد."""
+    if os.environ.get("QOOL_MODEL_ENDPOINT"):
+        return [endpoint()]
+    return [DEFAULT_ENDPOINT, *MIRRORS] if allow_mirrors else [DEFAULT_ENDPOINT]
+
+
+def _list_files(repo: str, base: str | None = None) -> list[tuple[str, int]]:
+    url = f"{(base or endpoint()).rstrip('/')}/api/models/{repo}/tree/main"
     with urllib.request.urlopen(url, timeout=30) as r:
         items = json.load(r)
     return [(i["path"], int(i.get("size", 0))) for i in items
@@ -126,12 +136,30 @@ def _list_files(repo: str) -> list[tuple[str, int]]:
 
 
 def download(key: str, progress: Callable[[int, int], None] | None = None,
-             cancel: threading.Event | None = None) -> Path:
-    """ينزّل النموذج إلى مجلد النماذج المحلي مع الاستكمال عند الانقطاع."""
+             cancel: threading.Event | None = None, allow_mirrors: bool = True) -> Path:
+    """ينزّل النموذج مع الاستكمال عند الانقطاع.
+
+    لو المصدر الأساسي محجوب، بيجرّب المرايا المعروفة لوحده قبل ما يفشل.
+    """
+    last: Exception | None = None
+    for base in sources(allow_mirrors):
+        try:
+            return _download_from(base, key, progress, cancel)
+        except DownloadCancelled:
+            raise
+        except (urllib.error.URLError, OSError, TimeoutError) as e:
+            log.warning("فشل التنزيل من %s: %s", base, e)
+            last = e
+    raise last if last else RuntimeError("مفيش مصدر تنزيل متاح")
+
+
+def _download_from(base: str, key: str, progress, cancel) -> Path:
     info = CATALOG[key]
     dest = model_path(key)
     dest.mkdir(parents=True, exist_ok=True)
-    files = _list_files(info.repo)
+    files = _list_files(info.repo, base)
+    if base != DEFAULT_ENDPOINT:
+        log.info("التنزيل من مصدر بديل: %s", base)
     total = sum(s for _, s in files)
     done = 0
     for name, size in files:
@@ -143,7 +171,7 @@ def download(key: str, progress: Callable[[int, int], None] | None = None,
             continue
         part = dest / (name + ".part")
         have = part.stat().st_size if part.exists() else 0
-        req = urllib.request.Request(f"{endpoint()}/{info.repo}/resolve/main/{name}")
+        req = urllib.request.Request(f"{base.rstrip('/')}/{info.repo}/resolve/main/{name}")
         if have:
             req.add_header("Range", f"bytes={have}-")
         with urllib.request.urlopen(req, timeout=60) as r:
@@ -166,7 +194,7 @@ def download(key: str, progress: Callable[[int, int], None] | None = None,
             raise IOError(f"حجم الملف {name} غير مطابق؛ أعد المحاولة")
         part.replace(target)
     (dest / _COMPLETE_MARK).write_text("ok", encoding="utf-8")
-    log.info("اكتمل تنزيل النموذج %s", key)
+    log.info("اكتمل تنزيل النموذج %s من %s", key, base)
     return dest
 
 
