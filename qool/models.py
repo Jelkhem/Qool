@@ -150,6 +150,22 @@ def download(key: str, progress: Callable[[int, int], None] | None = None,
         except (urllib.error.URLError, OSError, TimeoutError) as e:
             log.warning("فشل التنزيل من %s: %s", base, e)
             last = e
+    # آخر محاولة: نسخة مرفوعة على GitHub Releases (بتعدّي من شبكات بتحجب HF)
+    if not os.environ.get("QOOL_MODEL_ENDPOINT"):
+        try:
+            from . import github_models
+            log.info("بنجرّب تنزيل %s من GitHub", key)
+            dest = model_path(key)
+            github_models.download(key, dest, progress, cancel)
+            (dest / _COMPLETE_MARK).write_text("ok", encoding="utf-8")
+            return dest
+        except DownloadCancelled:
+            raise
+        except KeyError:
+            log.info("النموذج %s مش مرفوع على GitHub", key)
+        except Exception as e:
+            log.warning("فشل التنزيل من GitHub: %s", e)
+            last = last or e
     raise last if last else RuntimeError("مفيش مصدر تنزيل متاح")
 
 
