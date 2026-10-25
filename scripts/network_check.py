@@ -30,6 +30,10 @@ TARGETS = [
     ("القارئ (Gemini)", "generativelanguage.googleapis.com",
      "https://generativelanguage.googleapis.com/v1beta/models"),
     ("تحديث البرنامج", "github.com", "https://github.com/Jelkhem/Qool"),
+    ("نماذج من GitHub", "objects.githubusercontent.com",
+     "https://objects.githubusercontent.com/"),  # الملفات المرفوعة في Releases بتتنزّل من هنا
+    ("نماذج من GitHub (بديل)", "release-assets.githubusercontent.com",
+     "https://release-assets.githubusercontent.com/"),
 ]
 
 UA = "Qool/1.0 (network-check)"
@@ -92,7 +96,7 @@ def main() -> int:
     except Exception:
         print("ملف الشهادات: certifi مش متثبتة")
     print("=" * 78)
-    print(f"{'الخدمة':<22}{'العنوان':<36}{'الحالة'}")
+    print(f"{'الخدمة':<24}{'العنوان':<38}{'الحالة'}")
     print("-" * 78)
     problems = []
     for label, host, url in TARGETS:
@@ -101,13 +105,13 @@ def main() -> int:
             reachable, status = http_status(url)
             if not reachable:
                 problems.append((label, "محجوب من البوابة"))
-            print(f"{label:<22}{host:<36}{'✅' if reachable else '⛔'} {status} | شهادة: {detail}")
+            print(f"{label:<24}{host:<38}{'✅' if reachable else '⛔'} {status} | شهادة: {detail}")
         elif state == "intercepted":
             problems.append((label, "اعتراض شهادات (Zscaler)"))
-            print(f"{label:<22}{host:<36}⛔ شهادة مرفوضة — {detail}")
+            print(f"{label:<24}{host:<38}⛔ شهادة مرفوضة — {detail}")
         else:
             problems.append((label, "محجوب / مش واصل"))
-            print(f"{label:<22}{host:<36}⛔ {detail}")
+            print(f"{label:<24}{host:<38}⛔ {detail}")
     print("=" * 78)
     if not problems:
         print("كل حاجة شغالة ✅")
